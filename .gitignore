@@ -1,0 +1,13 @@
+.dub
+.vscode
+bin/
+docs/
+docs.json
+__dummy.html
+/jsonview
+jsonview-test-*
+*.exe
+*.o
+*.obj
+*.lst
+*.pdb

@@ -1,0 +1,9 @@
+{
+  "name": "jsonview",
+  "description": "Lightweight viewer and editor for JSON, JSON Lines and Valve KeyValues files",
+  "authors": ["Leamare"],
+  "copyright": "Copyright © 2026, Leamare",
+  "targetType": "executable",
+  "targetName": "jsonview",
+  "targetPath": "bin"
+}
