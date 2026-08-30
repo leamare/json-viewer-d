@@ -2,6 +2,7 @@ module app;
 
 import std.conv : to;
 import std.getopt;
+import std.process : environment;
 import std.stdio;
 
 import doc.document;
@@ -12,7 +13,7 @@ import view.stats;
 enum appVersion = "1.0.0";
 
 int main(string[] args) {
-  bool stats, compact, tabs, kvTypes, showVersion;
+  bool tui, gui, stats, compact, tabs, kvTypes, showVersion;
   string convertTo, output, inputFormat;
   int indent = 4;
 
@@ -20,6 +21,8 @@ int main(string[] args) {
 
   try {
     help = getopt(args,
+      "tui|t", "Open in the terminal interface", &tui,
+      "gui|g", "Open in the graphical interface (default when there is a display)", &gui,
       "convert|c", "Convert to json, jsonl, kv or kv3 and print it, or write to --output", &convertTo,
       "output|o", "Output file for --convert", &output,
       "format|f", "Input format: json, jsonl, kv or kv3, detected by default", &inputFormat,
@@ -78,6 +81,7 @@ int main(string[] args) {
   try {
     if (fromStdin) {
       docs ~= documentFromText(readStdin(), forced);
+      reattachTerminal();
     }
 
     foreach (f; files) {
@@ -115,7 +119,23 @@ int main(string[] args) {
     return 0;
   }
 
-  stderr.writeln("Nothing to do, see --help");
+  if (tui || (!gui && !displayAvailable())) {
+    import tui.app : runTui;
+
+    if (docs.length > 1) {
+      stderr.writeln("Terminal interface shows one file at a time, opening the first one");
+    }
+
+    auto d = docs.length ? docs[0] : documentFromText("{}");
+
+    foreach (extra; docs.length > 1 ? docs[1 .. $] : null) {
+      destroy(extra);
+    }
+
+    return runTui(d);
+  }
+
+  stderr.writeln("Graphical interface is not there yet, use --tui");
 
   return 1;
 }
@@ -186,6 +206,14 @@ private string readStdin() {
   return cast(string)data;
 }
 
+private bool displayAvailable() {
+  version (Windows) {
+    return true;
+  } else {
+    return environment.get("DISPLAY").length > 0;
+  }
+}
+
 private bool stdinIsTerminal() {
   version (Windows) {
     import core.sys.windows.windows;
@@ -196,5 +224,22 @@ private bool stdinIsTerminal() {
     import core.sys.posix.unistd : isatty;
 
     return isatty(0) != 0;
+  }
+}
+
+/// After reading piped data the terminal interface still needs keyboard input
+private void reattachTerminal() {
+  version (Posix) {
+    import core.sys.posix.fcntl : open, O_RDONLY;
+    import core.sys.posix.unistd : dup2, close;
+
+    auto fd = open("/dev/tty", O_RDONLY);
+
+    if (fd < 0) {
+      return;
+    }
+
+    dup2(fd, 0);
+    close(fd);
   }
 }
