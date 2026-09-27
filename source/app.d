@@ -135,9 +135,10 @@ int main(string[] args) {
     return runTui(d);
   }
 
-  stderr.writeln("Graphical interface is not there yet, use --tui");
+  import gui.app : runGui;
+  detachConsole();
 
-  return 1;
+  return runGui(docs);
 }
 
 private int convert(Document doc, Format target, string output, int indent, bool tabs, bool compact,
@@ -242,4 +243,23 @@ private void reattachTerminal() {
     dup2(fd, 0);
     close(fd);
   }
+}
+
+/// Console window of a double-clicked exe is useless for the GUI
+private void detachConsole() {
+  version (Windows) {
+    import core.sys.windows.windows;
+
+    DWORD[2] list;
+
+    if (GetConsoleProcessList(list.ptr, 2) == 1) {
+      FreeConsole();
+    }
+  }
+}
+
+version (Windows) {
+  import core.sys.windows.windef : DWORD;
+
+  private extern (Windows) DWORD GetConsoleProcessList(DWORD*, DWORD) nothrow @nogc;
 }
