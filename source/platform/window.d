@@ -99,6 +99,17 @@ Window createWindow(string title, int width, int height) {
     return new Win32Window(title, width, height);
   } else {
     import platform.x11 : X11Window;
+    import std.process : environment;
+
+    version (linux) {
+      if (environment.get("WAYLAND_DISPLAY").length && !environment.get("JSONVIEW_X11").length) {
+        import platform.wayland : WaylandWindow;
+        try {
+          return new WaylandWindow(title, width, height);
+        } catch (Exception) {
+        }
+      }
+    }
 
     return new X11Window(title, width, height);
   }

@@ -211,7 +211,7 @@ private bool displayAvailable() {
   version (Windows) {
     return true;
   } else {
-    return environment.get("DISPLAY").length > 0;
+    return environment.get("DISPLAY").length > 0 || environment.get("WAYLAND_DISPLAY").length > 0;
   }
 }
 
