@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=JSON Viewer
+GenericName=JSON Viewer
+Comment=View and edit JSON, JSON Lines and Valve KeyValues files
+Exec=jsonview %F
+Icon=jsonview
+Terminal=false
+Categories=Development;Utility;TextEditor;
+MimeType=application/json;application/x-ndjson;application/jsonl;text/x-json;
+StartupWMClass=jsonview
