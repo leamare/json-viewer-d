@@ -215,6 +215,7 @@ final class Win32Window : Window {
     }
 
     scope (exit) CloseClipboard();
+
     EmptyClipboard();
     auto mem = GlobalAlloc(GMEM_MOVEABLE, (wide.length + 1) * wchar.sizeof);
 
@@ -236,6 +237,7 @@ final class Win32Window : Window {
     }
 
     scope (exit) CloseClipboard();
+
     auto mem = GetClipboardData(CF_UNICODETEXT);
 
     if (!mem) {
@@ -249,6 +251,7 @@ final class Win32Window : Window {
     }
 
     scope (exit) GlobalUnlock(mem);
+
     size_t n = 0;
 
     while (p[n]) {

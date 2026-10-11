@@ -809,6 +809,7 @@ final class WaylandWindow : Window {
     e.mods = mods;
     // shortcuts use the first layout, so Ctrl+C works with any keyboard layout
     const(uint)* syms;
+
     if (xkb_keymap_key_get_syms_by_level(keymap, xkbKey, 0, 0, &syms) > 0) {
       e.key = mapKeysym(syms[0]);
     }

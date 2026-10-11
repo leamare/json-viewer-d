@@ -91,6 +91,7 @@ version (Windows) bool windowsCopy(string text) {
   }
 
   scope (exit) CloseClipboard();
+
   EmptyClipboard();
   auto mem = GlobalAlloc(GMEM_MOVEABLE, (w.length + 1) * wchar.sizeof);
 

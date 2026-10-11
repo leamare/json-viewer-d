@@ -248,6 +248,7 @@ version (Windows) private bool windowsAppsUseLight() {
     return true;
   }
   scope (exit) RegCloseKey(key);
+
   RegQueryValueExW(key, "AppsUseLightTheme"w.ptr, null, null, cast(ubyte*)&value, &size);
 
   return value != 0;

@@ -61,6 +61,7 @@ final class SourceView : Widget {
     if (!lineStarts.length) {
       lineStarts ~= 0;
       const(char)* p = text.ptr, end = text.ptr + text.length;
+
       while (p < end) {
         auto nl = cast(const(char)*)memchr(p, '\n', end - p);
 
