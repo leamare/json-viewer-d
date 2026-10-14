@@ -15,6 +15,7 @@ Everything is drawn by the app itself, so it's a single executable without depen
   - JSON, including comments (`//`, `/* */`) and trailing commas
   - JSON Lines, detected automatically (`.jsonl`, `.ndjson`, `.ljson` or just several values in one file)
   - Valve KeyValues (`.vdf`, `.res`, Dota 2 script files) and KeyValues3 (`.kv3`, `.vdata`)
+- Compressed files: `.json.gz`, `.vdf.bz2` and so on are opened and saved as usual, compression is detected by the content too
 - Saving in any of these formats, also from the source view where the document can be shown in another format before saving
 - Editing values and keys, adding and removing elements, editing any element as text, undo/redo
 - Strings that contain JSON or KeyValues can be opened as a subtree, edited and saved back as a string, in the same or another format
@@ -65,6 +66,7 @@ Examples:
 jsonview -c kv3 -o items.kv3 items.json
 jsonview -c json --kv-types npc_heroes.txt > heroes.json
 jsonview -s replay.jsonl
+jsonview -c jsonl -o replay.jsonl.bz2 replay.jsonl.gz
 ```
 
 ### Keys
@@ -90,6 +92,7 @@ TUI keys are shown with F1. `E` opens the selected element in `$EDITOR`.
 - Files are limited to 4 billion nodes, should be enough
 - On Wayland the window needs server side decorations (KDE, wlroots based compositors), otherwise it runs through XWayland. `JSONVIEW_X11=1` forces X11
 - Native file dialogs on Linux use `kdialog` or `zenity` when one of them is installed
+- gzip support is built in, bzip2 needs libbz2 (always there on Linux, on Windows `bz2.dll` has to be next to the exe). Compressed files are unpacked into memory, so they take more RAM than plain ones
 
 ## TODO List
 
