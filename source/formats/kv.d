@@ -342,7 +342,11 @@ private void putKvValue(Out)(ref Out o, const Document doc, uint c) {
   const n = &doc.nodes[c];
 
   if (n.isContainer) {
-    putKvString(o, embeddedText(doc, c));
+    if (n.has(NodeFlags.original) && !n.embedChanged && n.valueSyntax == Syntax.kv) {
+      o.put(doc.embeddedSource(c));
+    } else {
+      putKvString(o, embeddedText(doc, c));
+    }
 
     return;
   }

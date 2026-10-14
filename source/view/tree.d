@@ -64,15 +64,39 @@ final class TreeModel {
   bool canExpand(size_t r) const {
     auto n = &doc.nodes[rows[r].node];
 
+    if (n.type == NodeType.string) {
+      return holdsDocument(rows[r].node);
+    }
+
     return n.isContainer && n.len > 0;
   }
 
-  void expand(size_t r) {
+  bool holdsDocument(uint i) const {
+    import doc.text : rawLooksLikeJson;
+
+    auto n = &doc.nodes[i];
+
+    return n.type == NodeType.string && rawLooksLikeJson(doc.valueRaw(i), n.valueSyntax);
+  }
+
+  string expand(size_t r) {
     auto id = rows[r].node;
     auto n = &doc.nodes[id];
 
+    if (holdsDocument(id)) {
+      import doc.edit : expandEmbedded;
+
+      auto err = expandEmbedded(doc, id);
+
+      if (!err.length) {
+        rebuild();
+      }
+
+      return err;
+    }
+
     if (!n.isContainer || n.has(NodeFlags.expanded)) {
-      return;
+      return null;
     }
 
     n.set(NodeFlags.expanded);
@@ -80,6 +104,8 @@ final class TreeModel {
 
     collect(id, rows[r].depth, rows[r].index, sub);
     rows.insertInPlace(r + 1, sub[1 .. $]);
+
+    return null;
   }
 
   void collapse(size_t r) {
@@ -94,12 +120,14 @@ final class TreeModel {
     removeSubRows(r);
   }
 
-  void toggle(size_t r) {
+  string toggle(size_t r) {
     if (isExpanded(r)) {
       collapse(r);
-    } else {
-      expand(r);
+
+      return null;
     }
+
+    return expand(r);
   }
 
   void expandAll(size_t r) {

@@ -44,6 +44,7 @@ private string makeCopyText(const Document doc, uint i, CopyKind kind) {
       auto opt = defaultOptions(doc, Format.json);
 
       opt.embeddedRoot = true;
+      opt.readable = true;
 
       return nodeToText(doc, i, Format.json, opt);
     case CopyKind.jsonCompact:
@@ -51,6 +52,7 @@ private string makeCopyText(const Document doc, uint i, CopyKind kind) {
 
       opt.compact = true;
       opt.embeddedRoot = true;
+      opt.readable = true;
 
       return nodeToText(doc, i, Format.json, opt);
     case CopyKind.kv:
@@ -152,7 +154,7 @@ private string embeddedPrefix(in Node n) {
 }
 
 string embeddedFormatName(in Node n) {
-  switch (cast(Format)n.embedFormat) {
+  switch (cast(Format)n.embedKind) {
     case Format.kv: return "KV";
     case Format.kv3: return "KV3";
     default: return "JSON";

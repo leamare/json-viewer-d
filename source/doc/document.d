@@ -235,6 +235,19 @@ final class Document {
     return res.data;
   }
 
+  const(char)[] embeddedSource(uint i) const {
+    auto n = &nodes[i];
+
+    if (!n.has(NodeFlags.original)) {
+      return null;
+    }
+
+    auto at = cast(size_t)n.pos;
+    ulong len = *cast(const(ulong)*)pool[at .. at + ulong.sizeof].ptr;
+
+    return pool[at + ulong.sizeof .. at + ulong.sizeof + cast(size_t)len];
+  }
+
   ulong appendPool(const(char)[] text) {
     auto at = pool.length;
 
@@ -274,6 +287,7 @@ final class Document {
 
     if (!silent) {
       redoList.length = 0;
+      markEmbeddedChanged(parent);
     }
 
     auto back = apply(c);
@@ -292,6 +306,7 @@ final class Document {
     auto c = Change(n.parent, i, 1, [n], true);
 
     redoList.length = 0;
+    markEmbeddedChanged(n.parent);
     pushUndo(apply(c));
   }
 
@@ -330,6 +345,14 @@ final class Document {
     undoList ~= back;
 
     return c.start < nodes.length ? c.start : 0;
+  }
+
+  private void markEmbeddedChanged(uint from) {
+    for (uint p = from; p != noNode; p = nodes[p].parent) {
+      if (nodes[p].has(NodeFlags.embedded)) {
+        nodes[p].markEmbedChanged();
+      }
+    }
   }
 
   private void pushUndo(Change c) {

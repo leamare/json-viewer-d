@@ -404,7 +404,11 @@ void writeJson(Out)(ref Out o, const Document doc, uint i, in WriteOptions opt, 
   const n = &doc.nodes[i];
 
   if (n.has(NodeFlags.embedded) && n.isContainer && !(level == 0 && opt.embeddedRoot)) {
-    putJsonString(o, embeddedText(doc, i));
+    if (n.has(NodeFlags.original) && !n.embedChanged && n.valueSyntax == Syntax.json) {
+      o.put(doc.embeddedSource(i));
+    } else {
+      putJsonString(o, embeddedText(doc, i));
+    }
 
     return;
   }
@@ -426,7 +430,7 @@ void writeJson(Out)(ref Out o, const Document doc, uint i, in WriteOptions opt, 
       putJsonNumber(o, doc.valueRaw(i));
       break;
     case NodeType.string:
-      if (n.valueSyntax == Syntax.json) {
+      if (n.valueSyntax == Syntax.json && !(opt.readable && n.has(NodeFlags.escaped))) {
         o.put(doc.valueRaw(i));
         break;
       }
@@ -565,7 +569,7 @@ uint[][] groupByKey(const Document doc, uint i) {
 private void putKey(Out)(ref Out o, const Document doc, uint c, in WriteOptions opt) {
   if (!doc.hasKey(c)) {
     putJsonString(o, doc.indexInParent(c).to!string);
-  } else if (doc.nodes[c].keySyntax == Syntax.json) {
+  } else if (doc.nodes[c].keySyntax == Syntax.json && !(opt.readable && doc.nodes[c].has(NodeFlags.keyEsc))) {
     o.put(doc.keyRaw(c));
   } else {
     putJsonString(o, doc.key(c));

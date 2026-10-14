@@ -501,7 +501,13 @@ private void writeKv3Value(Out)(ref Out o, const Document doc, uint i, in WriteO
   }
 
   if (embedded) {
-    putKv3String(o, embeddedText(doc, i), false);
+    auto syntax = n.valueSyntax;
+
+    if (n.has(NodeFlags.original) && !n.embedChanged && (syntax == Syntax.kv || syntax == Syntax.multiline)) {
+      o.put(doc.embeddedSource(i));
+    } else {
+      putKv3String(o, embeddedText(doc, i), false);
+    }
 
     return;
   }

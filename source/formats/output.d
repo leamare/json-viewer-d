@@ -70,6 +70,7 @@ struct WriteOptions {
   bool detectTypes;
   bool groupDuplicates;
   bool embeddedRoot;
+  bool readable;
 }
 
 void putIndent(Out)(ref Out o, in WriteOptions opt, int level) {

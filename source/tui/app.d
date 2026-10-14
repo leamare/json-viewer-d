@@ -10,7 +10,6 @@ import std.uni : toLower;
 
 import doc.document;
 import doc.edit;
-import doc.text : looksLikeJson;
 import formats;
 import tui.clipboard;
 import tui.screen;
@@ -57,6 +56,7 @@ private final class TuiApp {
   int detailsScroll;
 
   string[] detailsLines;
+  ulong detailsRevision;
   uint detailsNode = noNode;
   bool detailsTruncated;
 
@@ -162,7 +162,7 @@ private final class TuiApp {
       case Key.end: tree.cursor = tree.length - 1; break;
       case Key.right: goIn(); break;
       case Key.left: goOut(); break;
-      case Key.enter: tree.toggle(r); break;
+      case Key.enter: toggle(r); break;
       case Key.tab:
         if (showDetails) {
           detailsFocus = true;
@@ -209,7 +209,7 @@ private final class TuiApp {
       case 'h': goOut(); break;
       case 'g': tree.cursor = 0; break;
       case 'G': tree.cursor = tree.length - 1; break;
-      case ' ': tree.toggle(tree.cursor); break;
+      case ' ': toggle(tree.cursor); break;
       case '+': case '*': expandAll(); break;
       case '-': tree.collapseAll(tree.cursor); break;
       case 'e': editValue(); break;
@@ -325,7 +325,7 @@ private final class TuiApp {
 
     tree.cursor = r;
     if (doubleClick || (ev.x >= markerX && ev.x < markerX + 2)) {
-      tree.toggle(r);
+      toggle(r);
     }
   }
 
@@ -385,6 +385,14 @@ private final class TuiApp {
     }
   }
 
+  void toggle(size_t r) {
+    auto err = tree.toggle(r);
+
+    if (err.length) {
+      error(err);
+    }
+  }
+
   void move(long delta) {
     if (!tree.length) {
       return;
@@ -403,7 +411,7 @@ private final class TuiApp {
     }
 
     if (!tree.isExpanded(r)) {
-      tree.expand(r);
+      toggle(r);
     } else {
       move(1);
     }
@@ -959,7 +967,7 @@ private final class TuiApp {
       auto vs = valueStyle(node.type);
       int vx = screen.put(treeX + keyW + 2, y, preview, vs, treeX + treeW);
 
-      if (node.type == NodeType.string && looksLikeJson(preview) && vx + 7 < treeX + treeW) {
+      if (tree.holdsDocument(n) && vx + 7 < treeX + treeW) {
         screen.put(vx + 1, y, "‹json›", Style(Color.blue, Color.none, Attr.dim), treeX + treeW);
       }
 
@@ -972,7 +980,8 @@ private final class TuiApp {
   void drawDetails() {
     auto sel = tree.selected;
 
-    if (sel != detailsNode) {
+    if (sel != detailsNode || doc.revision != detailsRevision) {
+      detailsRevision = doc.revision;
       detailsNode = sel;
       detailsScroll = 0;
       if (sel == noNode) {
@@ -982,6 +991,7 @@ private final class TuiApp {
 
         opt.indent = 2;
         opt.embeddedRoot = true;
+        opt.readable = true;
         auto text = nodeToText(doc, sel, Format.json, opt, detailsLimit, &detailsTruncated);
 
         detailsLines = text.splitLines;

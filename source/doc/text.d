@@ -325,6 +325,42 @@ bool looksLikeJson(const(char)[] s) {
   return (s[a] == '{' && s[b - 1] == '}') || (s[a] == '[' && s[b - 1] == ']');
 }
 
+bool rawLooksLikeJson(const(char)[] raw, Syntax syntax) {
+  if (syntax == Syntax.multiline && raw.length >= 6) {
+    raw = raw[3 .. $ - 3];
+  } else if ((syntax == Syntax.json || syntax == Syntax.kv) && raw.length >= 2) {
+    raw = raw[1 .. $ - 1];
+  }
+
+  size_t a = 0, b = raw.length;
+
+  while (true) {
+    if (a < b && isSpace(raw[a])) {
+      a++;
+    } else if (a + 1 < b && raw[a] == '\\' && (raw[a + 1] == 'n' || raw[a + 1] == 't' || raw[a + 1] == 'r')) {
+      a += 2;
+    } else {
+      break;
+    }
+  }
+
+  while (true) {
+    if (b > a && isSpace(raw[b - 1])) {
+      b--;
+    } else if (b >= a + 2 && raw[b - 2] == '\\' && (raw[b - 1] == 'n' || raw[b - 1] == 't' || raw[b - 1] == 'r')) {
+      b -= 2;
+    } else {
+      break;
+    }
+  }
+
+  if (b - a < 2) {
+    return false;
+  }
+
+  return (raw[a] == '{' && raw[b - 1] == '}') || (raw[a] == '[' && raw[b - 1] == ']');
+}
+
 bool isBareKey(const(char)[] s) {
   if (!s.length || isDigit(s[0])) {
     return false;

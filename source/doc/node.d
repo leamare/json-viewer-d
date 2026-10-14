@@ -27,6 +27,10 @@ enum NodeFlags : ubyte {
   embedded = 1 << 4,
   // view state, kept here so it follows the node through edits
   expanded = 1 << 5,
+  // embedded container remembers the string it was parsed from
+  original = 1 << 6,
+  // that string had quotes escaped once more, PHP addslashes style
+  slashed  = 1 << 7,
 }
 
 /// One element of the document tree. Nodes are stored in a flat array in
@@ -59,6 +63,12 @@ struct Node {
   }
 
   bool isContainer() const { return type == NodeType.object || type == NodeType.array; }
+
+  /// Format of an embedded document, the high bit marks it as edited since it was parsed
+  ubyte embedKind() const { return embedFormat & 0x7F; }
+  bool embedChanged() const { return (embedFormat & 0x80) != 0; }
+  void setEmbedKind(ubyte f) { embedFormat = cast(ubyte)((embedFormat & 0x80) | f); }
+  void markEmbedChanged() { embedFormat |= 0x80; }
 
   Syntax valueSyntax() const { return cast(Syntax)(syntax & 0x0F); }
   Syntax keySyntax() const { return cast(Syntax)(syntax >> 4); }

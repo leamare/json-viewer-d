@@ -53,6 +53,7 @@ private final class DocTab {
   ulong generatedRevision = ulong.max;
   size_t generatedFormat;
   bool saveCompact;
+  ulong shownRevision;
   Stats stats;
   Hashes hashes;
   Thread hashThread;
@@ -191,6 +192,7 @@ final class GuiApp {
     grid.onContextMenu = (x, y) { contextMenu(x, y); };
     grid.onEdit = (node, text, key) { inlineEdit(node, text, key); };
     grid.onActivate = () { ui.setFocus(details); };
+    grid.onError = (err) { setStatus(err, true); };
 
     details = new TextEdit(ui);
     details.onChange = () { detailsDirty = true; updateDetailsButtons(); };
@@ -382,6 +384,7 @@ final class GuiApp {
   }
 
   private void draw() {
+    syncWithDocument();
     ui.dirty = false;
     auto c = ui.canvas;
 
@@ -1322,6 +1325,29 @@ final class GuiApp {
     loadDetails();
   }
 
+  /// Strings opened as documents right in the tree change the document
+  /// without going through afterEdit
+  private void syncWithDocument() {
+    auto t = tab();
+
+    if (t is null || t.doc.revision == t.shownRevision) {
+      return;
+    }
+
+    t.shownRevision = t.doc.revision;
+    t.stats = collectStats(t.doc);
+    if (!detailsDirty) {
+      detailsNode = noNode;
+      loadDetails();
+    }
+
+    if (t.sourceMode) {
+      updateSource();
+    }
+
+    updateTitle();
+  }
+
   private void loadDetails() {
     auto d = doc();
 
@@ -1346,6 +1372,7 @@ final class GuiApp {
 
       opt.tabs = indentTabs;
       opt.embeddedRoot = true;
+      opt.readable = true;
       text = nodeToText(d, detailsNode, Format.json, opt, detailsLimit, &detailsTruncated);
     }
 
@@ -1421,6 +1448,7 @@ final class GuiApp {
     t.tree.top = top;
     grid.ensureVisible();
     t.stats = collectStats(t.doc);
+    t.shownRevision = t.doc.revision;
     detailsNode = noNode;
     loadDetails();
     if (t.sourceMode) {
@@ -1921,7 +1949,7 @@ final class GuiApp {
       separator(),
     ];
     if (embedded) {
-      auto f = cast(Format)d[sel].embedFormat;
+      auto f = cast(Format)d[sel].embedKind;
 
       items ~= item("Turn back into string", "Ctrl+J", () { toggleEmbedded(); });
       items ~= check("Store as JSON", "", f != Format.kv && f != Format.kv3,

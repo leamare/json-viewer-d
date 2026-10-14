@@ -1,5 +1,6 @@
 module doc.edit;
 
+import std.algorithm : canFind;
 import std.string : strip;
 
 import doc.document;
@@ -38,16 +39,21 @@ string replaceWithJson(Document doc, uint i, const(char)[] text) {
   return replaceWithText(doc, i, text, Format.json);
 }
 
-string replaceWithText(Document doc, uint i, const(char)[] text, Format format, ubyte extraFlags = 0) {
+string replaceWithText(Document doc, uint i, const(char)[] text, Format format, ubyte extraFlags = 0,
+  bool silent = false) {
   import formats.kv : parseKv;
   import formats.kv3 : parseKv3;
 
   auto n = doc[i];
   auto keyRaw = doc.keyRaw(i);
-
+  bool embedding = (extraFlags & NodeFlags.embedded) != 0;
   auto keyAt = doc.appendPool(keyRaw);
 
   doc.appendPool(keyRaw.length ? ":" : "");
+
+  // the string a document is parsed from is kept, so it can be saved untouched
+  const(char)[] original = embedding ? doc.valueRaw(i) : doc.embeddedSource(i);
+  auto originAt = original.length ? appendOriginal(doc, original) : 0;
   auto at = doc.appendPool(text);
 
   Node[] fresh;
@@ -77,25 +83,40 @@ string replaceWithText(Document doc, uint i, const(char)[] text, Format format, 
 
   auto root = &fresh[0];
 
-  copyKey(*root, n, keyAt, at);
   root.flags |= extraFlags;
-  if (extraFlags & NodeFlags.embedded) {
+  if (embedding) {
     root.embedFormat = format;
-  }
-
-  if (n.has(NodeFlags.embedded) && root.isContainer) {
-    root.set(NodeFlags.embedded);
+    root.pos = originAt;
+    root.set(NodeFlags.original);
+    copyKey(*root, n, keyAt, originAt);
+    root.setSyntax(n.valueSyntax, n.keySyntax);
+  } else if (n.has(NodeFlags.embedded) && root.isContainer) {
+    root.flags |= n.flags & (NodeFlags.embedded | NodeFlags.slashed | NodeFlags.original);
     root.embedFormat = n.embedFormat;
+    root.markEmbedChanged();
+    root.pos = originAt;
+    copyKey(*root, n, keyAt, originAt);
+    root.setSyntax(n.valueSyntax, n.keySyntax);
+  } else {
+    copyKey(*root, n, keyAt, at);
   }
 
   if (root.isContainer) {
-    root.set(NodeFlags.expanded, n.has(NodeFlags.expanded) ||
-      (extraFlags & NodeFlags.embedded));
+    root.set(NodeFlags.expanded, n.has(NodeFlags.expanded) || embedding);
   }
 
-  doc.replace(n.parent, i, n.end - i, fresh);
+  doc.replace(n.parent, i, n.end - i, fresh, silent);
 
   return null;
+}
+
+private ulong appendOriginal(Document doc, const(char)[] raw) {
+  ulong len = raw.length;
+  auto at = doc.appendPool((cast(const(char)*)&len)[0 .. ulong.sizeof]);
+
+  doc.appendPool(raw);
+
+  return at;
 }
 
 string renameKey(Document doc, uint i, string newKey) {
@@ -114,7 +135,9 @@ string renameKey(Document doc, uint i, string newKey) {
 
   Node fresh = n;
 
-  if (n.isContainer) {
+  if (n.isContainer && n.has(NodeFlags.original)) {
+    fresh.pos = appendOriginal(doc, doc.embeddedSource(i));
+  } else if (n.isContainer) {
     fresh.pos = doc.appendPool("");
   } else {
     fresh.pos = doc.appendPool(doc.valueRaw(i));
@@ -195,6 +218,7 @@ uint insertNode(Document doc, uint parent, uint before, string key, string value
 
 string expandEmbedded(Document doc, uint i, Format format = Format.unknown) {
   import formats.embedded : embeddedFormat;
+  import std.algorithm : canFind;
 
   auto n = doc[i];
 
@@ -220,7 +244,16 @@ string expandEmbedded(Document doc, uint i, Format format = Format.unknown) {
     return "The string doesn't contain a JSON object or array";
   }
 
-  return replaceWithText(doc, i, text, format, NodeFlags.embedded);
+  auto err = replaceWithText(doc, i, text, format, NodeFlags.embedded, true);
+
+  // JSON that went through addslashes: {\"a\":1}
+  if (err.length && text.canFind(`\"`)) {
+    if (!replaceWithText(doc, i, stripSlashes(text), format, NodeFlags.embedded | NodeFlags.slashed, true).length) {
+      return null;
+    }
+  }
+
+  return err;
 }
 
 string setEmbeddedFormat(Document doc, uint i, Format format) {
@@ -234,7 +267,8 @@ string setEmbeddedFormat(Document doc, uint i, Format format) {
     format = Format.json;
   }
 
-  n.embedFormat = format;
+  n.setEmbedKind(format);
+  n.markEmbedChanged();
   doc.patch(i, n);
 
   return null;
@@ -249,6 +283,17 @@ string collapseEmbedded(Document doc, uint i) {
     return "Not an embedded document";
   }
 
+  if (n.has(NodeFlags.original) && !n.embedChanged) {
+    auto raw = doc.embeddedSource(i);
+    auto fresh = makeNode(doc, i, raw, NodeType.string);
+
+    fresh.setSyntax(n.valueSyntax, n.keySyntax);
+    fresh.set(NodeFlags.escaped, raw.canFind('\\'));
+    doc.replace(n.parent, i, n.end - i, [fresh], true);
+
+    return null;
+  }
+
   StringSink raw;
 
   putJsonString(raw, embeddedText(doc, i));
@@ -259,6 +304,34 @@ string collapseEmbedded(Document doc, uint i) {
   doc.replace(n.parent, i, n.end - i, [fresh]);
 
   return null;
+}
+
+string stripSlashes(const(char)[] s) {
+  char[] res;
+
+  for (size_t k = 0; k < s.length; k++) {
+    if (s[k] == '\\' && k + 1 < s.length && (s[k + 1] == '"' || s[k + 1] == '\\' || s[k + 1] == '\'')) {
+      k++;
+    }
+
+    res ~= s[k];
+  }
+
+  return cast(string)res;
+}
+
+string addSlashes(const(char)[] s) {
+  char[] res;
+
+  foreach (char c; s) {
+    if (c == '"' || c == '\\' || c == '\'') {
+      res ~= '\\';
+    }
+
+    res ~= c;
+  }
+
+  return cast(string)res;
 }
 
 private Node makeNode(Document doc, uint i, const(char)[] valueRaw, NodeType type) {

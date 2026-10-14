@@ -3,7 +3,6 @@ module gui.treegrid;
 import std.algorithm : min, max;
 
 import doc.document;
-import doc.text : looksLikeJson;
 import gui.ui;
 import view.actions : embeddedFormatName, nodeLabel, valuePreview;
 import view.tree;
@@ -16,6 +15,7 @@ final class TreeGrid : Widget {
   void delegate(int x, int y) onContextMenu;
   void delegate(uint, string, bool) onEdit;
   void delegate() onActivate;
+  void delegate(string) onError;
 
   LineEdit editor;
   private bool editing;
@@ -179,7 +179,7 @@ final class TreeGrid : Widget {
       vc = selected ? fg : t.dimText;
     }
 
-    bool jsonInside = n.type == NodeType.string && looksLikeJson(text);
+    bool jsonInside = tree.holdsDocument(id);
 
     if (jsonInside) {
       room -= ui.px(40);
@@ -414,7 +414,12 @@ final class TreeGrid : Widget {
   }
 
   void toggle(size_t r) {
-    tree.toggle(r);
+    auto err = tree.toggle(r);
+
+    if (err.length && onError) {
+      onError(err);
+    }
+
     ensureVisible();
     ui.invalidate();
   }
