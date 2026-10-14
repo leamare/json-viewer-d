@@ -2,7 +2,6 @@ module doc.document;
 
 import core.stdc.string : memmove;
 import std.array : Appender;
-import std.mmfile : MmFile;
 
 public import doc.node;
 import formats.compression : Compression;
@@ -40,7 +39,6 @@ final class Document {
   double parseTime = 0;
 
   private const(char)[] source;
-  private MmFile mapping;
   private char[] pool;
 
   private Change[] undoList;
@@ -51,24 +49,13 @@ final class Document {
 
   this() {}
 
-  this(const(char)[] text, MmFile map = null) {
+  this(const(char)[] text) {
     source = text;
-    mapping = map;
     fileSize = text.length;
   }
 
   @property const(char)[] sourceText() const { return source; }
   @property size_t poolSize() const { return pool.length; }
-
-  void detachSource() {
-    if (mapping is null) {
-      return;
-    }
-
-    source = source.idup;
-    destroy(mapping);
-    mapping = null;
-  }
 
   @property uint root() const { return 0; }
   @property size_t length() const { return nodes.length; }

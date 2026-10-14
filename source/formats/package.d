@@ -2,11 +2,9 @@ module formats;
 
 import core.time : MonoTime;
 import std.file : exists, getSize, read, remove, rename;
-import std.mmfile : MmFile;
 import std.path : extension, absolutePath;
 import std.stdio : File;
 import std.string : toLower;
-import std.uni : sicmp;
 
 import doc.document;
 import doc.text;
@@ -143,8 +141,10 @@ private bool isBareKeyChar(char c) {
   return c == '_' || c == '.' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || isDigit(c);
 }
 
+/// Opens a file. It's read into memory as a whole: a memory mapped file
+/// changes under the parser when another program rewrites it, and the tree
+/// would point to garbage.
 Document openDocument(string path, Format format = Format.unknown) {
-  MmFile map;
   const(char)[] text;
   auto size = getSize(path);
   auto compression = Compression.none;
@@ -160,11 +160,10 @@ Document openDocument(string path, Format format = Format.unknown) {
   if (compression != Compression.none) {
     text = cast(const(char)[])decompress(compression, cast(const(ubyte)[])read(path));
   } else if (size > 0) {
-    map = new MmFile(path);
-    text = cast(const(char)[])map[];
+    text = cast(const(char)[])read(path);
   }
 
-  auto doc = new Document(text, map);
+  auto doc = new Document(text);
 
   doc.path = path.absolutePath;
   doc.fileSize = size;
@@ -294,11 +293,7 @@ void saveDocument(Document doc, string path, Format format, WriteOptions opt) {
   }
 
   version (Windows) {
-    // mapped file can't be replaced on Windows
-    if (doc.path.length && sicmp(doc.path, path) == 0) {
-      doc.detachSource();
-    }
-
+    // rename doesn't replace existing files on Windows
     if (path.exists) {
       remove(path);
     }
