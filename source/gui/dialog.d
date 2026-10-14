@@ -40,8 +40,7 @@ final class Dialog : Widget {
 
     buttons = null;
     foreach (i, l; buttonLabels) {
-      auto idx = cast(int)i;
-      auto b = new Button(ui, l, () { press(idx); });
+      auto b = new Button(ui, l, pressHandler(cast(int)i));
 
       b.primary = i == 0;
       buttons ~= b;
@@ -55,6 +54,11 @@ final class Dialog : Widget {
   }
 
   override bool focusable() { return true; }
+
+  // a delegate made right in the loop would see the last index for every button
+  private void delegate() pressHandler(int button) {
+    return () { press(button); };
+  }
 
   void press(int button) {
     if (!visible) {

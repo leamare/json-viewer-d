@@ -298,7 +298,9 @@ final class GuiApp {
     }
 
     switchTo(i);
-    ask("Unsaved changes", tabs[i].title ~ " has unsaved changes. Save them?",
+    auto name = tabs[i].doc.path.length ? tabs[i].doc.path.baseName : "Untitled document";
+
+    ask("Unsaved changes", name ~ " has unsaved changes. Save them?",
       ["Save", "Discard", "Cancel"], (b, _) {
       if (b == 0) {
         save(() { doClose(); });
