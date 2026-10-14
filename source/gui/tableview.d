@@ -1,48 +1,124 @@
 module gui.tableview;
 
-import std.algorithm : canFind, min, max, startsWith;
+import std.algorithm : canFind, min, max;
 import std.conv : to;
+import std.range : assumeSorted;
 
 import doc.document;
 import doc.edit : expandEmbedded, stripSlashes;
+import gui.menu : MenuItem, separator, toggle, item;
 import gui.ui;
 import view.actions : containerSummary, describeNode, nodeLabel, valuePreview;
 import view.tree : TreeModel;
 
+private enum ColKind {
+  path,
+  value,
+  type,
+}
+
+/// Column of the table. Expanded columns are groups: their children go on the
+/// next header level. A group made from an array of objects shows elements as
+/// sub-rows, paths of its children start from the element.
+private final class Col {
+  string title;
+  string[] path;
+  ColKind kind;
+  Col parent;
+  Col[] children;
+  bool expanded;
+  bool asRows;
+  bool hidden;
+  bool expandable;
+  int width;
+
+  int x;
+  int w;
+
+  this(string title, string[] path, Col parent = null, ColKind kind = ColKind.path) {
+    this.title = title;
+    this.path = path;
+    this.parent = parent;
+    this.kind = kind;
+  }
+
+  @property bool isGroup() const { return expanded && children.length > 0; }
+
+  int depth() {
+    int d = 0;
+
+    for (Col p = parent; p !is null; p = p.parent) {
+      d++;
+    }
+
+    return d;
+  }
+
+  Col rowsGroup() {
+    for (auto p = parent; p !is null; p = p.parent) {
+      if (p.asRows) {
+        return p;
+      }
+    }
+
+    return null;
+  }
+
+  /// Steps from the row, or from the element of rowsGroup, to the cell
+  string[] steps() {
+    auto group = rowsGroup;
+    string[] res;
+
+    for (Col c = this; c !is null && c !is group; c = c.parent) {
+      res = c.path ~ res;
+    }
+
+    return res;
+  }
+}
+
 final class TableView : Widget {
   void delegate(uint) onOpen;
+  void delegate(int, int, MenuItem[]) onHeaderMenu;
 
   private Document doc;
   private TreeModel tree;
   private uint node = noNode;
   private uint[] rows;
   private const(uint)[] indices;
-  private Column[] columns;
-  private Column[] originals;
+  private Col[] roots;
+  private Col[] leaves;
+  private int levels = 1;
+  private int firstWidth;
   private bool byKeys;
   private string[uint] summaries;
   private Document listening;
+  private Layout[string] layouts;
+  private string layoutKey;
+
+  private uint[] offsets;
+  private bool heightsDirty = true;
 
   private size_t cursor;
-  private size_t top;
+  private long topLine;
   private int scrollX;
   private ScrollBar vbar;
   private ScrollBar hbar = ScrollBar(false);
-  private int resizing = -1;
+  private Col resizing;
+  private bool resizingFirst;
   private int resizeStart, resizeWidth;
   private bool barHot;
 
-  private static struct Column {
-    string title;
-    string[] path;
-    int width;
-    bool expandable;
-    int origin = -1;
+  private static struct Layout {
+    Col[] roots;
+    int firstWidth;
+    bool byKeys;
   }
 
   private enum maxColumns = 100;
   private enum sampleRows = 500;
   private enum prepareRows = 5000;
+  private enum maxSubRows = 200;
 
   this(Ui ui) {
     super(ui);
@@ -51,15 +127,15 @@ final class TableView : Widget {
   override bool focusable() { return true; }
 
   @property size_t rowCount() const { return rows.length; }
-  @property size_t columnCount() const { return columns.length; }
+  @property size_t columnCount() const { return leaves.length + 1; }
 
   @property int rowH() { return ui.rowHeight; }
-  @property int headerH() { return ui.rowHeight + ui.px(2); }
+  @property int headerH() { return levels * ui.rowHeight + ui.px(2); }
   @property int barSize() { return ui.px(12); }
-  @property int visibleRows() { return max(1, (rect.h - headerH - barSize) / rowH); }
+  @property int visibleLines() { return max(1, (rect.h - headerH - barSize) / rowH); }
 
   void setNode(Document d, TreeModel t, uint n, const(uint)[] children, const(uint)[] childIndices) {
-    bool same = d is doc && n == node && columns.length;
+    bool same = d is doc && n == node && roots.length;
 
     doc = d;
     tree = t;
@@ -67,16 +143,31 @@ final class TableView : Widget {
     rows = children.dup;
     indices = childIndices;
     summaries = null;
+    heightsDirty = true;
     if (listening !is d) {
       d.onShift ~= &shifted;
       listening = d;
+      layouts = null;
     }
 
     if (!same) {
       cursor = 0;
-      top = 0;
+      topLine = 0;
       scrollX = 0;
-      buildColumns();
+
+      auto key = d.pathOf(n);
+
+      layoutKey = key;
+      if (auto saved = key in layouts) {
+        roots = saved.roots;
+        firstWidth = saved.firstWidth;
+        byKeys = saved.byKeys;
+        markExpandable();
+        placeColumns();
+      } else {
+        buildColumns();
+        layouts[key] = Layout(roots, firstWidth, byKeys);
+      }
     } else {
       markExpandable();
     }
@@ -97,11 +188,11 @@ final class TableView : Widget {
     }
 
     summaries = null;
+    heightsDirty = true;
   }
 
   private void buildColumns() {
-    columns.length = 0;
-    originals.length = 0;
+    roots.length = 0;
 
     size_t objects;
     auto sample = rows[0 .. min(rows.length, sampleRows)];
@@ -113,23 +204,30 @@ final class TableView : Widget {
     }
 
     byKeys = sample.length && objects * 10 >= sample.length * 6;
-
-    auto first = doc.nodes[node].type == NodeType.array ? "#" : "Key";
-
-    columns ~= Column(first);
     if (byKeys) {
       foreach (key; keysOf(sample)) {
-        columns ~= Column(key, [key]);
+        roots ~= new Col(key, [key]);
       }
     } else {
-      columns ~= Column("Value");
-      columns ~= Column("Type");
+      roots ~= new Col("Value", null, null, ColKind.value);
+      roots ~= new Col("Type", null, null, ColKind.type);
     }
 
-    markExpandable();
-    foreach (ci; 0 .. columns.length) {
-      fitWidth(ci);
+    auto f = ui.fonts.ui;
+    auto title = doc.nodes[node].type == NodeType.array ? "#" : "Key";
+
+    firstWidth = f.measure(title) + ui.px(24);
+    foreach (r; 0 .. min(rows.length, 50)) {
+      firstWidth = max(firstWidth, f.measure(rowLabel(r)) + ui.px(16));
     }
+
+    firstWidth = min(firstWidth, ui.px(160));
+    markExpandable();
+    foreach (c; roots) {
+      fitWidth(c);
+    }
+
+    placeColumns();
   }
 
   private string[] keysOf(const(uint)[] list) {
@@ -156,51 +254,80 @@ final class TableView : Widget {
     return keys;
   }
 
-  private void fitWidth(size_t ci) {
-    auto f = ui.fonts.ui;
-    int buttons = (columns[ci].expandable ? 1 : 0) + (columns[ci].origin >= 0 ? 1 : 0);
-    int w = f.measure(columns[ci].title) + ui.px(20 + buttons * 20);
-
-    foreach (r; 0 .. min(rows.length, 50)) {
-      w = max(w, f.measure(cellText(r, ci, 120)) + ui.px(16));
+  private void eachColumn(void delegate(Col) fn, Col[] list = null) {
+    foreach (c; list is null ? roots : list) {
+      fn(c);
+      if (c.expanded && c.children.length) {
+        eachColumn(fn, c.children);
+      }
     }
-
-    columns[ci].width = min(max(w, ui.px(48)), ui.px(ci == 0 ? 160 : 320));
   }
 
   private void markExpandable() {
-    foreach (ci, ref col; columns) {
-      col.expandable = false;
-      if (!col.path.length) {
-        continue;
+    eachColumn((c) {
+      c.expandable = false;
+      if (c.kind != ColKind.path || c.expanded) {
+        return;
       }
 
-      foreach (r; 0 .. min(rows.length, 100)) {
-        auto n = cellNode(r, ci);
-
-        if (n != noNode && (doc.nodes[n].isContainer || tree.holdsDocument(n))) {
-          col.expandable = true;
+      foreach (n; sampleCells(c, 100)) {
+        if (doc.nodes[n].isContainer || tree.holdsDocument(n)) {
+          c.expandable = true;
           break;
         }
       }
-    }
+    });
   }
 
-  private uint cellNode(size_t r, size_t ci) {
-    auto cur = rows[r];
+  private void fitWidth(Col c) {
+    auto f = ui.fonts.ui;
+    int w = f.measure(c.title) + ui.px(40);
 
-    if (!byKeys || ci == 0) {
-      return cur;
+    foreach (n; sampleCells(c, 50)) {
+      w = max(w, f.measure(valueText(n, 120)) + ui.px(16));
     }
 
-    foreach (step; columns[ci].path) {
-      cur = child(cur, step);
-      if (cur == noNode) {
-        return noNode;
+    c.width = min(max(w, ui.px(48)), ui.px(320));
+  }
+
+  private void placeColumns() {
+    leaves.length = 0;
+    levels = 1;
+
+    int x = firstWidth;
+
+    foreach (c; roots) {
+      place(c, 0, x);
+    }
+
+    heightsDirty = true;
+  }
+
+  private void place(Col c, int depth, ref int x) {
+    if (c.hidden) {
+      c.w = 0;
+
+      return;
+    }
+
+    c.x = x;
+    if (c.isGroup) {
+      foreach (k; c.children) {
+        place(k, depth + 1, x);
       }
+
+      c.w = x - c.x;
+      if (c.w) {
+        levels = max(levels, depth + 2);
+      }
+
+      return;
     }
 
-    return cur;
+    levels = max(levels, depth + 1);
+    c.w = c.width;
+    leaves ~= c;
+    x += c.width;
   }
 
   private uint child(uint parent, string step) {
@@ -227,20 +354,78 @@ final class TableView : Widget {
     return noNode;
   }
 
-  private string cellText(size_t r, size_t ci, size_t maxLen = 300) {
-    auto row = rows[r];
+  private uint resolve(uint from, const(string)[] steps, bool open = false) {
+    auto cur = from;
 
-    if (ci == 0) {
-      return nodeLabel(doc, row, maxLen, indices.length > r ? indices[r] : size_t.max);
+    foreach (step; steps) {
+      if (open && tree.holdsDocument(cur)) {
+        expandEmbedded(doc, cur);
+      }
+
+      cur = child(cur, step);
+      if (cur == noNode) {
+        return noNode;
+      }
     }
 
-    if (!byKeys) {
-      return ci == 1 ? valueText(row, maxLen) : describeNode(doc, row);
+    if (open && tree.holdsDocument(cur)) {
+      expandEmbedded(doc, cur);
     }
 
-    auto n = cellNode(r, ci);
+    return cur;
+  }
 
-    return n == noNode ? null : valueText(n, maxLen);
+  private uint groupArray(size_t r, Col g, bool open = false) {
+    auto n = resolve(rows[r], g.steps, open);
+
+    return n != noNode && doc.nodes[n].type == NodeType.array ? n : noNode;
+  }
+
+  private uint[] cellsOf(size_t r, Col c, bool open = false) {
+    auto g = c.rowsGroup;
+
+    if (g is null) {
+      auto n = resolve(rows[r], c.steps, open);
+
+      return n == noNode ? null : [n];
+    }
+
+    auto arr = groupArray(r, g, open);
+
+    if (arr == noNode) {
+      return null;
+    }
+
+    uint[] res;
+    size_t k = 0;
+
+    foreach (el; doc.children(arr)) {
+      if (k++ >= maxSubRows) {
+        break;
+      }
+
+      res ~= c is g ? el : resolve(el, c.steps, open);
+    }
+
+    return res;
+  }
+
+  private uint[] sampleCells(Col c, size_t count, bool open = false) {
+    uint[] res;
+
+    foreach (r; 0 .. min(rows.length, count)) {
+      foreach (n; cellsOf(r, c, open)) {
+        if (n != noNode) {
+          res ~= n;
+        }
+      }
+    }
+
+    return res;
+  }
+
+  private string rowLabel(size_t r) {
+    return nodeLabel(doc, rows[r], 200, indices.length > r ? indices[r] : size_t.max);
   }
 
   private string valueText(uint n, size_t maxLen) {
@@ -282,123 +467,187 @@ final class TableView : Widget {
     return res;
   }
 
-  void expandColumn(size_t ci) {
-    auto path = columns[ci].path;
-    uint[] cells;
+  private Col[] rowGroups() {
+    Col[] res;
 
-    foreach (r; 0 .. min(rows.length, prepareRows)) {
-      auto n = cellNode(r, ci);
-
-      // opening keeps the node id, so the cell is the same node after it
-      if (n != noNode && tree.holdsDocument(n)) {
-        expandEmbedded(doc, n);
+    eachColumn((c) {
+      if (c.asRows && c.isGroup && c.w > 0) {
+        res ~= c;
       }
+    });
 
-      if (r < sampleRows && n != noNode) {
-        cells ~= n;
+    return res;
+  }
+
+  private uint linesOf(size_t r, Col[] groups) {
+    uint lines = 1;
+
+    foreach (g; groups) {
+      auto arr = groupArray(r, g);
+
+      if (arr != noNode) {
+        lines = max(lines, min(doc.nodes[arr].len, maxSubRows));
       }
     }
 
-    string[] steps = keysOf(cells);
+    return lines;
+  }
 
-    if (!steps.length) {
+  private void updateHeights() {
+    if (!heightsDirty) {
+      return;
+    }
+
+    heightsDirty = false;
+
+    auto groups = rowGroups();
+
+    offsets.length = rows.length + 1;
+    offsets[0] = 0;
+    foreach (r; 0 .. rows.length) {
+      offsets[r + 1] = offsets[r] + (groups.length ? linesOf(r, groups) : 1);
+    }
+  }
+
+  @property private long totalLines() { return offsets.length ? offsets[$ - 1] : 0; }
+
+  private size_t rowAtLine(long line) {
+    auto idx = offsets[0 .. rows.length].assumeSorted.lowerBound(cast(uint)line + 1).length;
+
+    return idx ? idx - 1 : 0;
+  }
+
+  void expandColumn(Col c) {
+    sampleCells(c, prepareRows, true);
+
+    auto cells = sampleCells(c, sampleRows);
+
+    string[] keys = keysOf(cells);
+    bool arrays = false;
+    uint[] elements;
+
+    if (!keys.length) {
+      foreach (n; cells) {
+        if (doc.nodes[n].type == NodeType.array) {
+          arrays = true;
+          foreach (el; doc.children(n)) {
+            elements ~= el;
+          }
+        }
+      }
+    }
+
+    c.children.length = 0;
+    if (keys.length) {
+      foreach (k; keys) {
+        c.children ~= new Col(k, [k], c);
+      }
+    } else if (arrays && c.rowsGroup is null) {
+      // elements become sub-rows, their keys are the columns
+      c.asRows = true;
+      foreach (k; keysOf(elements)) {
+        c.children ~= new Col(k, [k], c);
+      }
+
+      if (!c.children.length) {
+        c.children ~= new Col("value", null, c);
+      }
+    } else if (arrays) {
       size_t longest = 0;
 
-      foreach (c; cells) {
-        if (doc.nodes[c].type == NodeType.array) {
-          longest = max(longest, doc.nodes[c].len);
-        }
+      foreach (n; cells) {
+        longest = max(longest, doc.nodes[n].len);
       }
 
       foreach (k; 0 .. min(longest, 20)) {
-        steps ~= "[" ~ k.to!string ~ "]";
+        auto step = "[" ~ k.to!string ~ "]";
+
+        c.children ~= new Col(step, [step], c);
       }
     }
 
-    if (!steps.length) {
+    if (!c.children.length) {
       return;
     }
 
-    auto origin = cast(int)originals.length;
-    Column[] fresh;
-
-    originals ~= columns[ci];
-    foreach (step; steps) {
-      auto title = columns[ci].title ~ (step[0] == '[' ? step : "." ~ step);
-
-      fresh ~= Column(title, path ~ step, 0, false, origin);
-    }
-
-    columns = columns[0 .. ci] ~ fresh ~ columns[ci + 1 .. $];
+    c.expanded = true;
     markExpandable();
-    foreach (k; ci .. ci + fresh.length) {
+    foreach (k; c.children) {
       fitWidth(k);
     }
 
+    placeColumns();
     ui.invalidate();
   }
 
-  void collapseColumn(size_t ci) {
-    if (columns[ci].origin < 0) {
-      return;
-    }
-
-    auto restored = originals[columns[ci].origin];
-    auto group = restored.path;
-    size_t first = ci, last = ci;
-
-    bool inside(size_t k) {
-      return columns[k].path.length > group.length && columns[k].path.startsWith(group);
-    }
-
-    while (first > 0 && inside(first - 1)) {
-      first--;
-    }
-
-    while (last + 1 < columns.length && inside(last + 1)) {
-      last++;
-    }
-
-    columns = columns[0 .. first] ~ restored ~ columns[last + 1 .. $];
+  void collapseColumn(Col c) {
+    c.expanded = false;
+    c.asRows = false;
+    c.children.length = 0;
     markExpandable();
+    fitWidth(c);
+    placeColumns();
     ui.invalidate();
+  }
+
+  private void setHidden(Col c, bool hidden) {
+    c.hidden = hidden;
+    placeColumns();
+    ui.invalidate();
+  }
+
+  private MenuItem[] columnsMenu(Col clicked) {
+    MenuItem[] items;
+
+    if (clicked !is null && clicked.expanded) {
+      items ~= item("Collapse " ~ clicked.title, null, () { collapseColumn(clicked); });
+      items ~= separator();
+    } else if (clicked !is null && clicked.expandable) {
+      items ~= item("Expand " ~ clicked.title, null, () { expandColumn(clicked); });
+      items ~= separator();
+    }
+
+    eachColumn((c) {
+      string indent;
+
+      foreach (_; 0 .. c.depth) {
+        indent ~= "    ";
+      }
+
+      auto col = c;
+
+      items ~= toggle(indent ~ c.title, !c.hidden, () { setHidden(col, !col.hidden); });
+    });
+    items ~= separator();
+    items ~= item("Show all columns", null, () {
+      eachColumn((c) { c.hidden = false; });
+      placeColumns();
+      ui.invalidate();
+    });
+
+    return items;
   }
 
   bool prepareVisible() {
-    if (doc is null || !byKeys) {
+    if (doc is null || !byKeys || !rows.length) {
       return false;
     }
 
-    bool changed = false;
+    updateHeights();
 
-    foreach (ref col; columns) {
-      if (col.path.length < 2) {
-        continue;
-      }
+    auto revision = doc.revision;
+    auto first = rowAtLine(topLine);
+    auto last = rowAtLine(topLine + visibleLines);
 
-      foreach (k; 0 .. visibleRows + 1) {
-        auto r = top + k;
-
-        if (r >= rows.length) {
-          break;
-        }
-
-        auto cur = rows[r];
-
-        foreach (step; col.path[0 .. $ - 1]) {
-          cur = child(cur, step);
-          if (cur == noNode) {
-            break;
-          }
-
-          if (tree.holdsDocument(cur) && !expandEmbedded(doc, cur).length) {
-            changed = true;
-          }
+    eachColumn((c) {
+      if (c.isGroup) {
+        foreach (r; first .. min(last + 1, rows.length)) {
+          cellsOf(r, c, true);
         }
       }
-    }
+    });
 
-    return changed;
+    return doc.revision != revision;
   }
 
   override void layout(Rect r) {
@@ -409,86 +658,26 @@ final class TableView : Widget {
 
   override void draw(Canvas c) {
     auto t = ui.theme;
-    auto f = ui.fonts.ui;
 
     c.fill(rect, t.view);
     if (doc is null) {
       return;
     }
 
-    auto body = Rect(rect.x, rect.y + headerH, rect.w - barSize, rect.h - headerH - barSize);
-    int totalW = 0;
+    layout(rect);
+    updateHeights();
 
-    foreach (ref col; columns) {
-      totalW += col.width;
-    }
+    auto body = Rect(rect.x, rect.y + headerH, rect.w - barSize, rect.h - headerH - barSize);
+    int totalW = leaves.length ? leaves[$ - 1].x + leaves[$ - 1].w : firstWidth;
 
     scrollX = max(0, min(scrollX, totalW - body.w));
+    topLine = max(0, min(topLine, totalLines - visibleLines));
+    drawHeader(c, body);
+    drawRows(c, body);
 
-    auto header = Rect(rect.x, rect.y, rect.w, headerH);
-
-    c.fill(header, mix(t.window, t.view, 0.5));
-    c.hline(header.x, header.right, header.bottom - 1, t.border);
-    c.pushClip(Rect(rect.x, rect.y, body.w, rect.h));
-
-    int x = rect.x - scrollX;
-
-    foreach (ci, ref col; columns) {
-      int buttons = (col.expandable ? 1 : 0) + (col.origin >= 0 ? 1 : 0);
-      int textW = col.width - ui.px(12 + buttons * 20);
-
-      c.textFit(f, x + ui.px(8), header.y + (header.h - f.lineHeight) / 2, col.title, t.dimText, textW);
-      if (col.expandable) {
-        drawHeaderButton(c, buttonRect(x, col.width, 0), true);
-      }
-
-      if (col.origin >= 0) {
-        drawHeaderButton(c, buttonRect(x, col.width, col.expandable ? 1 : 0), false);
-      }
-
-      c.vline(x + col.width - 1, header.y + ui.px(4), header.bottom - ui.px(4), t.border);
-      x += col.width;
-    }
-
-    c.popClip();
-
-    c.pushClip(body);
-
-    auto lineColor = mix(t.view, t.border, 0.45);
-
-    foreach (k; 0 .. visibleRows + 1) {
-      auto r = top + k;
-
-      if (r >= rows.length) {
-        break;
-      }
-
-      int y = body.y + k * rowH;
-      bool selected = r == cursor;
-      Color bg = (r & 1) ? t.alternate : t.view;
-
-      if (selected) {
-        bg = focused ? t.selection : mix(t.view, t.selection, 0.35);
-      }
-
-      c.fill(Rect(body.x, y, body.w, rowH), bg);
-      x = body.x - scrollX;
-      foreach (ci, ref col; columns) {
-        if (x + col.width >= body.x && x < body.right) {
-          drawCell(c, r, ci, Rect(x, y, col.width, rowH), selected && focused);
-        }
-
-        x += col.width;
-      }
-
-      c.hline(body.x, body.right, y + rowH - 1, lineColor);
-    }
-
-    c.popClip();
-
-    vbar.total = rows.length;
-    vbar.page = visibleRows;
-    vbar.pos = top;
+    vbar.total = totalLines;
+    vbar.page = visibleLines;
+    vbar.pos = topLine;
     vbar.draw(c, t, barHot);
     hbar.total = totalW > body.w ? totalW : 0;
     hbar.page = body.w;
@@ -498,10 +687,73 @@ final class TableView : Widget {
     }
   }
 
-  private Rect buttonRect(int x, int width, int place) {
-    int s = ui.px(16);
+  private void drawHeader(Canvas c, Rect body) {
+    auto t = ui.theme;
+    auto f = ui.fonts.ui;
+    auto header = Rect(rect.x, rect.y, rect.w, headerH);
 
-    return Rect(x + width - (s + ui.px(4)) * (place + 1) - ui.px(2), rect.y + (headerH - s) / 2, s, s);
+    c.fill(header, mix(t.window, t.view, 0.5));
+    c.pushClip(Rect(rect.x, rect.y, body.w, headerH));
+    headerCell(c, Rect(rect.x - scrollX, rect.y, firstWidth, headerH), indexTitle, false, false);
+    eachColumn((col) {
+      if (col.w <= 0 || !visibleColumn(col)) {
+        return;
+      }
+
+      headerCell(c, headerRect(col), col.title, col.expandable, col.isGroup);
+    });
+    c.popClip();
+    c.hline(header.x, header.right, header.bottom - 1, t.border);
+  }
+
+  @property private string indexTitle() {
+    return doc.nodes[node].type == NodeType.array ? "#" : "Key";
+  }
+
+  private bool visibleColumn(Col col) {
+    for (auto p = col; p !is null; p = p.parent) {
+      if (p.hidden) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private Rect headerRect(Col col) {
+    int y = rect.y + col.depth * rowH;
+    int h = col.isGroup ? rowH : headerH - (y - rect.y);
+
+    return Rect(rect.x - scrollX + col.x, y, col.w, h);
+  }
+
+  private Rect visiblePart(Rect r) {
+    int left = max(r.x, rect.x + firstWidth), right = min(r.right, rect.right - barSize);
+
+    return right - left > ui.px(40) ? Rect(left, r.y, right - left, r.h) : r;
+  }
+
+  private void headerCell(Canvas c, Rect r, string title, bool plus, bool minus) {
+    auto t = ui.theme;
+    auto f = ui.fonts.ui;
+    bool button = plus || minus;
+    auto shown = visiblePart(r);
+    int ty = r.y + min(r.h, rowH) / 2 - f.lineHeight / 2 + (r.h > rowH ? (r.h - rowH) / 2 : 0);
+
+    c.textFit(f, shown.x + ui.px(8), ty, title, t.dimText, shown.w - ui.px(button ? 32 : 12));
+    if (button) {
+      drawHeaderButton(c, buttonRect(shown), plus);
+    }
+
+    c.vline(r.right - 1, r.y + ui.px(3), r.bottom - ui.px(3), t.border);
+    c.hline(r.x, r.right, r.bottom - 1, mix(t.window, t.border, 0.6));
+  }
+
+  private Rect buttonRect(Rect cell) {
+    int s = ui.px(16);
+    int y = cell.y + (min(cell.h, rowH) - s) / 2 + (cell.h > rowH ? (cell.h - rowH) / 2 : 0);
+
+    return Rect(cell.right - s - ui.px(6), y, s, s);
   }
 
   private void drawHeaderButton(Canvas c, Rect r, bool plus) {
@@ -515,30 +767,103 @@ final class TableView : Widget {
     }
   }
 
-  private void drawCell(Canvas c, size_t r, size_t ci, Rect cell, bool inverted) {
+  private void drawRows(Canvas c, Rect body) {
     auto t = ui.theme;
-    auto f = ui.fonts.ui;
-    bool label = ci == 0 || (!byKeys && ci == 2);
-    auto n = label ? noNode : cellNode(r, ci);
-    auto text = cellText(r, ci);
-    Color color = t.text;
+    auto lineColor = mix(t.view, t.border, 0.45);
 
-    if (label) {
-      color = t.dimText;
-    } else if (n != noNode) {
-      bool summary = doc.nodes[n].isContainer || tree.holdsDocument(n);
-
-      color = summary ? t.dimText : valueColor(doc.nodes[n].type);
+    if (!rows.length) {
+      return;
     }
 
-    if (inverted) {
-      color = t.selectionText;
+    c.pushClip(body);
+    for (auto r = rowAtLine(topLine); r < rows.length; r++) {
+      int y = body.y + cast(int)(offsets[r] - topLine) * rowH;
+      int h = cast(int)(offsets[r + 1] - offsets[r]) * rowH;
+
+      if (y >= body.bottom) {
+        break;
+      }
+
+      bool selected = r == cursor;
+      bool inverted = selected && focused;
+      Color bg = (r & 1) ? t.alternate : t.view;
+
+      if (selected) {
+        bg = focused ? t.selection : mix(t.view, t.selection, 0.35);
+      }
+
+      c.fill(Rect(body.x, y, body.w, h), bg);
+
+      int x0 = body.x - scrollX;
+
+      drawText(c, Rect(x0, y, firstWidth, rowH), rowLabel(r), inverted ? t.selectionText : t.dimText);
+      c.vline(x0 + firstWidth - 1, y, y + h, mix(t.view, t.border, 0.35));
+      foreach (leaf; leaves) {
+        auto cell = Rect(x0 + leaf.x, y, leaf.w, h);
+
+        if (cell.right < body.x || cell.x > body.right) {
+          continue;
+        }
+
+        drawColumn(c, r, leaf, cell, inverted);
+      }
+
+      c.hline(body.x, body.right, y + h - 1, lineColor);
     }
 
-    int ty = cell.y + (cell.h - f.lineHeight) / 2;
+    c.popClip();
+  }
 
-    c.textFit(f, cell.x + ui.px(8), ty, text, color, cell.w - ui.px(12));
+  private void drawColumn(Canvas c, size_t r, Col leaf, Rect cell, bool inverted) {
+    auto t = ui.theme;
+    auto subLine = mix(t.view, t.border, 0.25);
+
+    final switch (leaf.kind) {
+      case ColKind.value:
+        drawValue(c, rows[r], Rect(cell.x, cell.y, cell.w, rowH), inverted);
+        break;
+      case ColKind.type:
+        auto color = inverted ? t.selectionText : t.dimText;
+
+        drawText(c, Rect(cell.x, cell.y, cell.w, rowH), describeNode(doc, rows[r]), color);
+        break;
+      case ColKind.path:
+        auto nodes = cellsOf(r, leaf);
+        bool sub = leaf.rowsGroup !is null;
+
+        foreach (k, n; nodes) {
+          auto line = Rect(cell.x, cell.y + cast(int)k * rowH, cell.w, rowH);
+
+          if (n != noNode) {
+            drawValue(c, n, line, inverted);
+          }
+
+          if (sub && k + 1 < nodes.length) {
+            c.hline(line.x, line.right, line.bottom - 1, subLine);
+          }
+        }
+
+        break;
+    }
+
     c.vline(cell.right - 1, cell.y, cell.bottom, mix(t.view, t.border, 0.35));
+  }
+
+  private void drawValue(Canvas c, uint n, Rect line, bool inverted) {
+    auto t = ui.theme;
+    Color color = t.dimText;
+
+    if (!doc.nodes[n].isContainer && !tree.holdsDocument(n)) {
+      color = valueColor(doc.nodes[n].type);
+    }
+
+    drawText(c, line, valueText(n, 300), inverted ? t.selectionText : color);
+  }
+
+  private void drawText(Canvas c, Rect line, string text, Color color) {
+    auto f = ui.fonts.ui;
+
+    c.textFit(f, line.x + ui.px(8), line.y + (line.h - f.lineHeight) / 2, text, color, line.w - ui.px(12));
   }
 
   private Color valueColor(NodeType type) {
@@ -555,20 +880,16 @@ final class TableView : Widget {
   }
 
   private void ensureVisible() {
-    auto page = visibleRows;
+    updateHeights();
 
-    if (cursor < top) {
-      top = cursor;
+    auto first = cast(long)offsets[cursor], last = cast(long)offsets[cursor + 1];
+
+    if (first < topLine) {
+      topLine = first;
     }
 
-    if (cursor >= top + page) {
-      top = cursor - page + 1;
-    }
-
-    long maxTop = cast(long)rows.length - page;
-
-    if (cast(long)top > maxTop) {
-      top = cast(size_t)max(0, maxTop);
+    if (last > topLine + visibleLines) {
+      topLine = max(first, last - visibleLines);
     }
   }
 
@@ -583,13 +904,13 @@ final class TableView : Widget {
   }
 
   override bool keyDown(ref const Event e) {
-    long page = visibleRows - 1;
+    long page = max(1, visibleLines - 1);
 
     switch (e.key) {
       case Key.up: select(cast(long)cursor - 1); break;
       case Key.down: select(cast(long)cursor + 1); break;
-      case Key.pageUp: select(cast(long)cursor - page); break;
-      case Key.pageDown: select(cast(long)cursor + page); break;
+      case Key.pageUp: select(rowAtLine(max(0, cast(long)offsets[cursor] - page))); break;
+      case Key.pageDown: select(rowAtLine(offsets[cursor] + page)); break;
       case Key.home: select(0); break;
       case Key.end: select(cast(long)rows.length - 1); break;
       case Key.left: scrollX = max(0, scrollX - ui.px(60)); ui.invalidate(); break;
@@ -607,45 +928,42 @@ final class TableView : Widget {
     return true;
   }
 
-  private int columnEdgeAt(int x) {
-    int at = rect.x - scrollX;
+  private Col headerColumnAt(int x, int y) {
+    Col found;
+    int px = x - rect.x + scrollX;
+    int level = (y - rect.y) / rowH;
 
-    foreach (ci, ref col; columns) {
-      at += col.width;
-      if (x >= at - ui.px(4) && x <= at + ui.px(4)) {
-        return cast(int)ci;
+    eachColumn((col) {
+      if (col.w <= 0 || !visibleColumn(col) || px < col.x || px >= col.x + col.w) {
+        return;
+      }
+
+      if (col.isGroup ? col.depth == level : col.depth <= level) {
+        found = col;
+      }
+    });
+
+    return found;
+  }
+
+  private Col edgeAt(int x) {
+    int px = x - rect.x + scrollX;
+
+    foreach (leaf; leaves) {
+      int edge = leaf.x + leaf.w;
+
+      if (px >= edge - ui.px(4) && px <= edge + ui.px(4)) {
+        return leaf;
       }
     }
 
-    return -1;
-  }
-
-  private size_t columnAt(int x) {
-    int at = rect.x - scrollX;
-
-    foreach (ci, ref col; columns) {
-      if (x >= at && x < at + col.width) {
-        return ci;
-      }
-
-      at += col.width;
-    }
-
-    return 0;
-  }
-
-  private int columnStart(size_t ci) {
-    int at = rect.x - scrollX;
-
-    foreach (k; 0 .. ci) {
-      at += columns[k].width;
-    }
-
-    return at;
+    return null;
   }
 
   override Cursor cursorAt(int x, int y) {
-    if (resizing >= 0 || (y < rect.y + headerH && columnEdgeAt(x) >= 0)) {
+    bool firstEdge = abs(x - rect.x + scrollX - firstWidth) <= ui.px(4);
+
+    if (resizing !is null || resizingFirst || (y < rect.y + headerH && (edgeAt(x) !is null || firstEdge))) {
       return Cursor.resizeH;
     }
 
@@ -662,7 +980,7 @@ final class TableView : Widget {
     }
 
     if (vbar.mouseDown(e.x, e.y)) {
-      top = cast(size_t)vbar.pos;
+      topLine = vbar.pos;
       ui.invalidate();
 
       return true;
@@ -675,52 +993,108 @@ final class TableView : Widget {
       return true;
     }
 
-    auto r = top + (e.y - rect.y - headerH) / rowH;
-
-    if (r >= rows.length) {
+    if (!rows.length) {
       return true;
     }
 
-    select(r);
-    if (e.clicks == 2 && onOpen) {
-      auto n = cellNode(r, columnAt(e.x));
+    updateHeights();
 
-      onOpen(n == noNode ? rows[r] : n);
+    auto line = topLine + (e.y - rect.y - headerH) / rowH;
+
+    if (line >= totalLines) {
+      return true;
+    }
+
+    auto r = rowAtLine(line);
+
+    select(r);
+    if (e.button == MouseButton.right && onHeaderMenu) {
+      onHeaderMenu(e.x, e.y, columnsMenu(null));
+    } else if (e.clicks == 2 && onOpen) {
+      onOpen(cellAt(r, cast(size_t)(line - offsets[r]), e.x));
     }
 
     return true;
   }
 
+  private uint cellAt(size_t r, size_t sub, int x) {
+    int px = x - rect.x + scrollX;
+
+    foreach (leaf; leaves) {
+      if (px < leaf.x || px >= leaf.x + leaf.w || leaf.kind != ColKind.path) {
+        continue;
+      }
+
+      auto nodes = cellsOf(r, leaf);
+      auto k = leaf.rowsGroup is null ? 0 : sub;
+
+      if (k < nodes.length && nodes[k] != noNode) {
+        return nodes[k];
+      }
+    }
+
+    return rows[r];
+  }
+
   private void headerClick(ref const Event e) {
-    auto ci = columnAt(e.x);
-    auto col = columns[ci];
-    auto x = columnStart(ci);
-
-    if (col.expandable && buttonRect(x, col.width, 0).contains(e.x, e.y)) {
-      return expandColumn(ci);
-    }
-
-    if (col.origin >= 0 && buttonRect(x, col.width, col.expandable ? 1 : 0).contains(e.x, e.y)) {
-      return collapseColumn(ci);
-    }
-
-    resizing = columnEdgeAt(e.x);
-    if (resizing >= 0) {
+    if (abs(e.x - rect.x + scrollX - firstWidth) <= ui.px(4)) {
+      resizingFirst = true;
       resizeStart = e.x;
-      resizeWidth = columns[resizing].width;
+      resizeWidth = firstWidth;
+
+      return;
+    }
+
+    auto col = headerColumnAt(e.x, e.y);
+
+    if (e.button == MouseButton.right) {
+      if (onHeaderMenu) {
+        onHeaderMenu(e.x, e.y, columnsMenu(col));
+      }
+
+      return;
+    }
+
+    if (col !is null) {
+      auto cell = visiblePart(headerRect(col));
+
+      if ((col.expandable || col.isGroup) && buttonRect(cell).contains(e.x, e.y)) {
+        if (col.isGroup) {
+          collapseColumn(col);
+        } else {
+          expandColumn(col);
+        }
+
+        return;
+      }
+    }
+
+    resizing = edgeAt(e.x);
+    if (resizing !is null) {
+      resizeStart = e.x;
+      resizeWidth = resizing.width;
     }
   }
 
   override void mouseMove(ref const Event e) {
-    if (resizing >= 0) {
-      columns[resizing].width = max(ui.px(30), resizeWidth + e.x - resizeStart);
+    if (resizingFirst) {
+      firstWidth = max(ui.px(30), resizeWidth + e.x - resizeStart);
+      placeColumns();
+      ui.invalidate();
+
+      return;
+    }
+
+    if (resizing !is null) {
+      resizing.width = max(ui.px(30), resizeWidth + e.x - resizeStart);
+      placeColumns();
       ui.invalidate();
 
       return;
     }
 
     if (vbar.mouseMove(e.x, e.y)) {
-      top = cast(size_t)vbar.pos;
+      topLine = vbar.pos;
       ui.invalidate();
 
       return;
@@ -742,16 +1116,21 @@ final class TableView : Widget {
   }
 
   override void mouseUp(ref const Event e) {
-    resizing = -1;
+    if (resizingFirst) {
+      if (auto saved = layoutKey in layouts) {
+        saved.firstWidth = firstWidth;
+      }
+    }
+
+    resizing = null;
+    resizingFirst = false;
     vbar.mouseUp();
     hbar.mouseUp();
   }
 
   override bool wheel(ref const Event e) {
     if (e.wheelY != 0) {
-      long t = cast(long)top - cast(long)(e.wheelY * 3);
-
-      top = cast(size_t)max(0, min(t, cast(long)rows.length - visibleRows));
+      topLine = max(0, min(topLine - cast(long)(e.wheelY * 3), totalLines - visibleLines));
     }
 
     if (e.wheelX != 0) {
@@ -763,3 +1142,5 @@ final class TableView : Widget {
     return true;
   }
 }
+
+private int abs(int v) { return v < 0 ? -v : v; }

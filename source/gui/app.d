@@ -267,6 +267,12 @@ final class GuiApp {
       grid.reveal(n);
       ui.setFocus(grid);
     };
+    table.onHeaderMenu = (x, y, items) {
+      popup.onClose = null;
+      popup.onSideKey = null;
+      popup.open(x, y, items);
+      overlay = popup;
+    };
 
     search = new LineEdit(ui);
     search.placeholder = "Find in keys and values (Ctrl+F)";
@@ -1078,6 +1084,10 @@ final class GuiApp {
         break;
       case EventType.wheel:
         if (overlay !is null && overlay.visible) {
+          if (overlay is popup) {
+            popup.wheel(e);
+          }
+
           break;
         }
 

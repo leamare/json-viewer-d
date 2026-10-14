@@ -1,6 +1,6 @@
 module gui.menu;
 
-import std.algorithm : max;
+import std.algorithm : max, min;
 
 import gui.ui;
 
@@ -13,6 +13,7 @@ struct MenuItem {
   bool checked;
   bool checkable;
   bool separator;
+  bool keepOpen;
 }
 
 MenuItem item(string label, string shortcut, void delegate() action, bool enabled = true) {
@@ -21,6 +22,14 @@ MenuItem item(string label, string shortcut, void delegate() action, bool enable
 
 MenuItem check(string label, string shortcut, bool checked, void delegate() action) {
   auto m = MenuItem(label, shortcut, action, true, checked, true);
+
+  return m;
+}
+
+MenuItem toggle(string label, bool checked, void delegate() action) {
+  auto m = MenuItem(label, null, action, true, checked, true);
+
+  m.keepOpen = true;
 
   return m;
 }
@@ -40,6 +49,8 @@ final class PopupMenu : Widget {
   void delegate(int) onSideKey;
 
   private int hover = -1;
+  private int scroll;
+  private int contentH;
 
   this(Ui ui) {
     super(ui);
@@ -69,6 +80,9 @@ final class PopupMenu : Widget {
       x = max(0, ui.canvas.width - w);
     }
 
+    contentH = h;
+    scroll = 0;
+    h = min(h, ui.canvas.height - ui.px(16));
     if (y + h > ui.canvas.height) {
       y = max(0, ui.canvas.height - h);
     }
@@ -95,13 +109,15 @@ final class PopupMenu : Widget {
   override void draw(Canvas c) {
     auto t = ui.theme;
     auto f = ui.fonts.ui;
+
     foreach (k; 1 .. 4) {
       c.blend(Rect(rect.x + k, rect.y + k, rect.w, rect.h), 0x000000, 18);
     }
 
     c.roundRect(rect, ui.px(4), t.window, t.border);
+    c.pushClip(rect.shrink(1));
 
-    int y = rect.y + ui.px(4);
+    int y = rect.y + ui.px(4) - scroll;
 
     foreach (i, ref m; items) {
       if (m.separator) {
@@ -136,6 +152,8 @@ final class PopupMenu : Widget {
 
       y += itemHeight;
     }
+
+    c.popClip();
   }
 
   private int itemAt(int x, int y) {
@@ -143,7 +161,7 @@ final class PopupMenu : Widget {
       return -1;
     }
 
-    int at = rect.y + ui.px(4);
+    int at = rect.y + ui.px(4) - scroll;
 
     foreach (i, ref m; items) {
       int h = m.separator ? ui.px(9) : itemHeight;
@@ -185,10 +203,27 @@ final class PopupMenu : Widget {
     }
   }
 
+  override bool wheel(ref const Event e) {
+    scroll = max(0, min(scroll - cast(int)(e.wheelY * itemHeight * 3), contentH - rect.h));
+    ui.invalidate();
+
+    return true;
+  }
+
   private void activate(int i) {
     auto m = items[i];
 
     if (!m.enabled) {
+      return;
+    }
+
+    if (m.keepOpen) {
+      items[i].checked = !items[i].checked;
+      ui.invalidate();
+      if (m.action) {
+        m.action();
+      }
+
       return;
     }
 
