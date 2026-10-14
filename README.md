@@ -4,13 +4,14 @@ Lightweight viewer and editor for JSON files written in D.
 
 Made as a replacement for MiTeC JSON Viewer, which I really liked for how fast it is, but it's Windows only and it doesn't seem to be supported nowadays. I also wanted to add a couple of features I needed myself, and expand on it later.
 
-It opens huge files quickly and doesn't eat much memory: the file is memory mapped and the tree is a flat array of 32 byte nodes pointing into it, nothing is copied until you edit it. 300 MB JSON with ~18 million nodes loads in under a second and takes ~600 MB of RAM on top of the file itself.
+It opens huge files quickly and doesn't eat much memory: the tree is a flat array of 32 byte nodes pointing into the file text, nothing is copied until you edit it. 300 MB JSON with ~18 million nodes loads in under a second and takes ~600 MB of RAM on top of the file itself.
 
 Everything is drawn by the app itself, so it's a single executable without dependencies besides the system libraries (libX11 on Linux, Wayland libraries are picked up at runtime when available).
 
 ## Features
 
-- Tree view with Tag/Value columns, details pane with the selected element as text, source view, file statistics and hashes
+- Tree view with Tag/Value columns, details pane with the selected element as a table or as text, source view, file statistics and hashes
+- Arrays of similar objects are shown as a table with a column per key, columns with objects, arrays and JSON strings inside can be expanded into sub-columns
 - Formats:
   - JSON, including comments (`//`, `/* */`) and trailing commas
   - JSON Lines, detected automatically (`.jsonl`, `.ndjson`, `.ljson` or just several values in one file)
@@ -18,9 +19,11 @@ Everything is drawn by the app itself, so it's a single executable without depen
 - Compressed files: `.json.gz`, `.vdf.bz2` and so on are opened and saved as usual, compression is detected by the content too
 - Saving in any of these formats, also from the source view where the document can be shown in another format before saving
 - Editing values and keys, adding and removing elements, editing any element as text, undo/redo
-- Strings that contain JSON or KeyValues can be opened as a subtree, edited and saved back as a string, in the same or another format
+- Strings that contain JSON are opened as a subtree right away, KeyValues on request. They can be edited and are saved back as strings, untouched ones exactly as they were, edited ones in the same style (also with addslashes-like escaping) or in another format
 - Copying any element as value, path, JSON, minified JSON, KeyValues or KeyValues3
 - Search in keys and values, go to path (`$.items[3].name`)
+- Filtering children of an array or object: `type=epilogue`, several words, `-word` to exclude
+- Comparing two files, or the opened document with what changed on disk. A bar at the top tells when the file was changed by another program
 - GUI for Linux (X11 and native Wayland) and Windows, terminal UI for everything else
 - Takes colors and fonts from KDE settings, light/dark mode from Windows settings
 
@@ -58,6 +61,7 @@ curl -s https://example.com/api | jsonview -t
 - `--compact` - Write JSON without whitespace
 - `--kv-types` - When converting KeyValues, write strings that look like numbers or booleans as typed values
 - `-s | --stats` - Print file statistics and hashes
+- `-d | --diff` - Compare two files, in the GUI or as a list of differences when there's no display or the output is redirected
 - `-v | --version`, `-h | --help`
 
 Examples:
@@ -67,6 +71,7 @@ jsonview -c kv3 -o items.kv3 items.json
 jsonview -c json --kv-types npc_heroes.txt > heroes.json
 jsonview -s replay.jsonl
 jsonview -c jsonl -o replay.jsonl.bz2 replay.jsonl.gz
+jsonview -d old.json new.json > changes.txt
 ```
 
 ### Keys
@@ -79,6 +84,8 @@ GUI:
 - Ctrl+J - parse string as JSON/KV, or turn it back into a string
 - Ctrl+C - copy value, Ctrl+Shift+C - copy as JSON, right click for everything else
 - Ctrl+F or just start typing - find, F3/Shift+F3 - next/previous, Ctrl+G - go to path
+- Ctrl+L - filter children of the selected array or object
+- F7/Shift+F7 - next/previous difference in a comparison
 - Ctrl+Enter in the details pane - apply changes
 - Ctrl+U - source view, Ctrl+Z/Ctrl+Y - undo/redo
 - Ctrl+O/Ctrl+S/Ctrl+Shift+S - open, save, save as, Ctrl+Shift+V - open JSON from the clipboard
@@ -98,3 +105,5 @@ TUI keys are shown with F1. `E` opens the selected element in `$EDITOR`.
 
 - Support for "Wrapped" JSON objects (e.g. D2-LRG2 blobs)
 - Support for protobuf binary blobs with an option to load protobuf schema on top of that
+- Support for CSV
+- Column visibiility toggle in the preview
