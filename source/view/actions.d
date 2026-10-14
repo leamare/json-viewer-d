@@ -87,7 +87,19 @@ string suggestName(const Document doc, Format target) {
     return name;
   }
 
-  return name.setExtension(extensionFor(target));
+  auto packed = compressionFromExtension(name);
+
+  return name.withoutCompression.setExtension(extensionFor(target)) ~ compressionExtension(packed);
+}
+
+string describeFormat(const Document doc) {
+  auto name = formatName(doc.format);
+
+  if (doc.compression != Compression.none) {
+    return name ~ ", " ~ compressionName(doc.compression);
+  }
+
+  return name;
 }
 
 string saveAs(Document doc, string path, Format format = Format.unknown, bool detectTypes = false,

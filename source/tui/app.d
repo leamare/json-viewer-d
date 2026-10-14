@@ -863,7 +863,7 @@ private final class TuiApp {
 
     screen.fill(0, 0, w, ' ', titleStyle);
     auto title = " " ~ (doc.path.length ? doc.path.baseName : "untitled") ~ (doc.modified ? " *" : "") ~
-      "  " ~ formatName(doc.format) ~ "  " ~ groupDigits(doc.length) ~ " nodes ";
+      "  " ~ describeFormat(doc) ~ "  " ~ groupDigits(doc.length) ~ " nodes ";
     screen.put(0, 0, title, titleStyle, w);
     screen.put(w - 9, 0, "F1 Help ", titleStyle, w);
 

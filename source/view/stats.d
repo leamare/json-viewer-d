@@ -9,6 +9,7 @@ import doc.document;
 
 struct Stats {
   ulong fileSize;
+  ulong textSize;
   size_t objects;
   size_t arrays;
   size_t values;
@@ -19,7 +20,8 @@ struct Stats {
 Stats collectStats(const Document doc) {
   Stats s;
 
-  s.fileSize = doc.sourceText.length;
+  s.fileSize = doc.fileSize;
+  s.textSize = doc.sourceText.length;
   s.nodes = doc.length;
 
   // depth of every node is its parent's plus one, parents always come first

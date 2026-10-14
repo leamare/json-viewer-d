@@ -734,8 +734,13 @@ final class GuiApp {
     }
 
     res ~= Message("File", d.path.length ? d.path : "(not saved)", 0);
-    res ~= Message("Format", formatName(d.format), 0);
+    res ~= Message("Format", describeFormat(d), 0);
     res ~= Message("File size", formatSize(s.fileSize) ~ " (" ~ groupDigits(s.fileSize) ~ " bytes)", 0);
+
+    if (s.textSize != s.fileSize) {
+      res ~= Message("Unpacked size", formatSize(s.textSize) ~ " (" ~ groupDigits(s.textSize) ~ " bytes)", 0);
+    }
+
     auto pending = tb.hashesReady ? null : "computing…";
 
     res ~= Message("MD5", tb.hashesReady ? tb.hashes.md5 : pending, 1);
@@ -810,7 +815,7 @@ final class GuiApp {
       return;
     }
 
-    string right = formatName(d.format) ~ (d.modified ? "  •  Modified" : "");
+    string right = describeFormat(d) ~ (d.modified ? "  •  Modified" : "");
     int rw = f.measure(right);
 
     c.text(f, statusRect.right - rw - ui.px(12), ty, right, t.dimText);

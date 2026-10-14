@@ -5,6 +5,7 @@ import std.array : Appender;
 import std.mmfile : MmFile;
 
 public import doc.node;
+import formats.compression : Compression;
 import doc.text;
 
 enum Format : ubyte {
@@ -31,6 +32,9 @@ final class Document {
   string kv3Header;
   Node[] nodes;
 
+  Compression compression;
+  ulong fileSize;
+
   string error;
   ulong errorPos;
   double parseTime = 0;
@@ -50,6 +54,7 @@ final class Document {
   this(const(char)[] text, MmFile map = null) {
     source = text;
     mapping = map;
+    fileSize = text.length;
   }
 
   @property const(char)[] sourceText() const { return source; }

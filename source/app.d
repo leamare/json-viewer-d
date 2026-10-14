@@ -7,7 +7,7 @@ import std.stdio;
 
 import doc.document;
 import formats;
-import view.actions : formatFromName;
+import view.actions : describeFormat, formatFromName;
 import view.stats;
 
 enum appVersion = "1.0.0";
@@ -181,8 +181,13 @@ private void printStats(Document doc) {
   auto h = hashText(doc.sourceText);
 
   writeln(doc.path.length ? doc.path : "<stdin>");
-  writeln("  Format:      ", formatName(doc.format));
+  writeln("  Format:      ", describeFormat(doc));
   writeln("  File size:   ", formatSize(s.fileSize), " (", groupDigits(s.fileSize), " bytes)");
+
+  if (s.textSize != s.fileSize) {
+    writeln("  Unpacked:    ", formatSize(s.textSize), " (", groupDigits(s.textSize), " bytes)");
+  }
+
   writeln("  MD5:         ", h.md5);
   writeln("  SHA1:        ", h.sha1);
   writeln("  SHA256:      ", h.sha256);

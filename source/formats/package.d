@@ -1,7 +1,7 @@
 module formats;
 
 import core.time : MonoTime;
-import std.file : exists, getSize, remove, rename;
+import std.file : exists, getSize, read, remove, rename;
 import std.mmfile : MmFile;
 import std.path : extension, absolutePath;
 import std.stdio : File;
@@ -11,13 +11,13 @@ import std.uni : sicmp;
 import doc.document;
 import doc.text;
 public import formats.output : WriteOptions, StringSink;
-import formats.output : FileSink;
+public import formats.compression;
 import formats.json;
 import formats.kv;
 import formats.kv3;
 
 Format formatFromExtension(string path) {
-  switch (path.extension.toLower) {
+  switch (path.withoutCompression.extension.toLower) {
     case ".json":
     case ".jsonc":
     case ".json5":
@@ -145,9 +145,21 @@ private bool isBareKeyChar(char c) {
 
 Document openDocument(string path, Format format = Format.unknown) {
   MmFile map;
-
   const(char)[] text;
-  if (getSize(path) > 0) {
+  auto size = getSize(path);
+  auto compression = Compression.none;
+
+  if (size > 0) {
+    ubyte[4] head;
+    auto f = File(path, "rb");
+
+    compression = compressionFromData(f.rawRead(head[]));
+    f.close();
+  }
+
+  if (compression != Compression.none) {
+    text = cast(const(char)[])decompress(compression, cast(const(ubyte)[])read(path));
+  } else if (size > 0) {
     map = new MmFile(path);
     text = cast(const(char)[])map[];
   }
@@ -155,6 +167,8 @@ Document openDocument(string path, Format format = Format.unknown) {
   auto doc = new Document(text, map);
 
   doc.path = path.absolutePath;
+  doc.fileSize = size;
+  doc.compression = compression;
 
   if (format == Format.unknown) {
     // extension is a hint, a .json file saved as KeyValues is still KeyValues
@@ -182,9 +196,17 @@ Document documentFromText(const(char)[] text, Format format = Format.unknown) {
 }
 
 private void parseDocument(Document doc, Format format) {
+  import core.memory : GC;
+
   auto started = MonoTime.currTime;
   auto text = doc.sourceText;
   ParseResult r;
+
+  // parser allocates few big blocks, collections in between only waste time
+  GC.disable();
+  scope (exit) {
+    GC.enable();
+  }
 
   final switch (format) {
     case Format.unknown:
@@ -250,6 +272,11 @@ WriteOptions defaultOptions(const Document doc, Format target) {
 void saveDocument(Document doc, string path, Format format, WriteOptions opt) {
   path = path.absolutePath;
   auto tmp = path ~ ".saving";
+  auto compression = compressionFromExtension(path);
+
+  if (compression == Compression.none && doc.path == path) {
+    compression = doc.compression;
+  }
 
   {
     auto f = File(tmp, "wb");
@@ -258,7 +285,8 @@ void saveDocument(Document doc, string path, Format format, WriteOptions opt) {
       f.close();
       remove(tmp);
     }
-    auto sink = FileSink(f);
+
+    auto sink = CompressedSink(f, compression);
 
     writeDocument(sink, doc, 0, format, opt);
     sink.flush();
@@ -275,10 +303,13 @@ void saveDocument(Document doc, string path, Format format, WriteOptions opt) {
       remove(path);
     }
   }
+
   rename(tmp, path);
 
   doc.path = path;
   doc.format = format;
+  doc.compression = compression;
+  doc.fileSize = getSize(path);
   doc.markSaved();
 }
 

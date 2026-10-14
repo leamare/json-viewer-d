@@ -179,8 +179,9 @@ FileFilter[] documentFilters() {
         "*.acf", "*.txt"]),
     FileFilter("JSON", ["*.json", "*.jsonc"]),
     FileFilter("JSON Lines", ["*.jsonl", "*.ndjson"]),
-    FileFilter("KeyValues", ["*.vdf", "*.kv", "*.res", "*.acf", "*.txt"]),
+    FileFilter("KeyValues", ["*.vdf", "*.kv", "*.res", "*.acf", "*.txt", "*.gz", "*.bz2"]),
     FileFilter("KeyValues3", ["*.kv3", "*.vdata"]),
+    FileFilter("Compressed", ["*.gz", "*.bz2"]),
     FileFilter("All files", ["*"]),
   ];
 }
