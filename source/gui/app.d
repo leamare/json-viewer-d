@@ -1,9 +1,12 @@
 module gui.app;
 
 import core.thread : Thread;
+import core.time : MonoTime, msecs;
 import core.atomic : atomicLoad, atomicStore;
 import std.algorithm : min, max;
 import std.conv : to;
+import std.datetime : SysTime;
+import std.file : exists, getSize, timeLastModified;
 import std.format : format;
 import std.path : baseName, dirName;
 import std.string : strip;
@@ -12,6 +15,7 @@ import doc.document;
 import doc.edit;
 import formats;
 import gui.dialog;
+import gui.diffview;
 import gui.menu;
 import gui.sourceview;
 import gui.tableview;
@@ -20,11 +24,12 @@ import gui.treegrid;
 import gui.ui;
 import platform.dialogs;
 import view.actions;
+import view.diff;
 import view.search;
 import view.stats;
 import view.tree;
 
-int runGui(Document[] docs) {
+int runGui(Document[] docs, bool compare = false) {
   GuiApp app;
 
   try {
@@ -36,8 +41,12 @@ int runGui(Document[] docs) {
     return 1;
   }
 
-  foreach (d; docs) {
-    app.addTab(d);
+  if (compare && docs.length == 2) {
+    app.openDiff(docs[0], docs[1], docs[0].path, docs[1].path);
+  } else {
+    foreach (d; docs) {
+      app.addTab(d);
+    }
   }
 
   return app.run();
@@ -55,6 +64,13 @@ private final class DocTab {
   size_t generatedFormat;
   bool saveCompact;
   ulong shownRevision;
+
+  DiffView diff;
+  string diffTitle;
+
+  SysTime diskTime;
+  ulong diskSize;
+  bool changedOnDisk;
   Stats stats;
   Hashes hashes;
   Thread hashThread;
@@ -63,11 +79,50 @@ private final class DocTab {
 
   this(Document d) {
     doc = d;
+    rememberDiskState();
     tree = new TreeModel(d);
     stats = collectStats(d);
   }
 
+  void rememberDiskState() {
+    changedOnDisk = false;
+    if (!doc.path.length || !doc.path.exists) {
+      return;
+    }
+
+    try {
+      diskTime = doc.path.timeLastModified;
+      diskSize = doc.path.getSize;
+    } catch (Exception) {
+    }
+  }
+
+  bool checkDisk() {
+    if (diff !is null || changedOnDisk || !doc.path.length) {
+      return false;
+    }
+
+    try {
+      if (!doc.path.exists) {
+        return false;
+      }
+
+      if (doc.path.timeLastModified != diskTime || doc.path.getSize != diskSize) {
+        changedOnDisk = true;
+
+        return true;
+      }
+    } catch (Exception) {
+    }
+
+    return false;
+  }
+
   string title() {
+    if (diff !is null) {
+      return diffTitle;
+    }
+
     auto name = doc.path.length ? doc.path.baseName : "untitled";
 
     return doc.modified ? name ~ " *" : name;
@@ -154,6 +209,9 @@ final class GuiApp {
   private Rect treeToggle, sourceToggle;
   private Rect sourceBar;
   private Rect tableToggle, textToggle;
+  private Rect noticeRect;
+  private Button reloadButton, diffButton, dismissButton;
+  private MonoTime lastDiskCheck;
   private Rect[] sourceFormatRects;
   private float mainSplit = 0.42;
   private int messagesLines = 7;
@@ -220,6 +278,12 @@ final class GuiApp {
     revertButton = new Button(ui, "Revert", () { revertDetails(); });
     embedButton = new Button(ui, "Parse", () { toggleEmbedded(); });
     useFormatButton = new Button(ui, "Use for saving", () { useSourceFormat(); });
+    reloadButton = new Button(ui, "Reload", () { reload(); });
+    diffButton = new Button(ui, "Show changes", () { diffWithDisk(); });
+    dismissButton = new Button(ui, "Dismiss", () {
+      tab().rememberDiskState();
+      relayout();
+    });
 
     dialog = new Dialog(ui);
     dialog.visible = false;
@@ -335,6 +399,8 @@ final class GuiApp {
         timeout = 100;
       } else if (cast(TextEdit)ui.focus || cast(LineEdit)ui.focus) {
         timeout = 530;
+      } else if (tabs.length) {
+        timeout = 1000;
       }
 
       Event e;
@@ -348,6 +414,7 @@ final class GuiApp {
         idle();
       }
 
+      periodic();
       if (ui.dirty && running) {
         draw();
       }
@@ -360,6 +427,21 @@ final class GuiApp {
     window.close();
 
     return 0;
+  }
+
+  private void periodic() {
+    auto now = MonoTime.currTime;
+
+    if (now - lastDiskCheck < 1000.msecs) {
+      return;
+    }
+
+    lastDiskCheck = now;
+    foreach (t; tabs) {
+      if (t.checkDisk() && t is tab()) {
+        relayout();
+      }
+    }
   }
 
   private bool hashing() {
@@ -408,8 +490,14 @@ final class GuiApp {
     menuBar.draw(c);
     drawTabs(c);
 
+    if (!noticeRect.empty) {
+      drawNotice(c);
+    }
+
     if (!tabs.length) {
       drawWelcome(c);
+    } else if (tab().diff !is null) {
+      tab().diff.draw(c);
     } else if (tab().sourceMode) {
       drawSourceBar(c);
       source.draw(c);
@@ -440,6 +528,21 @@ final class GuiApp {
     y = menuBar.rect.bottom;
     tabsRect = Rect(0, y, w, row + ui.px(8));
     y = tabsRect.bottom;
+    noticeRect = Rect(0, y, w, 0);
+    if (tabs.length && tab().changedOnDisk) {
+      noticeRect.h = row + ui.px(12);
+      y = noticeRect.bottom;
+
+      int bx = w - ui.px(8);
+
+      foreach (b; [dismissButton, diffButton, reloadButton]) {
+        int bw = b.preferredWidth() - ui.px(16);
+
+        bx -= bw;
+        b.layout(Rect(bx, noticeRect.y + ui.px(6), bw, row));
+        bx -= ui.px(6);
+      }
+    }
 
     statusRect = Rect(0, h - row - ui.px(4), w, row + ui.px(4));
     int msgH = showMessages ? messagesLines * ui.fonts.ui.lineHeight + ui.px(12) : 0;
@@ -490,6 +593,10 @@ final class GuiApp {
 
     sourceBar = Rect(cr.x, cr.y, cr.w, row + ui.px(10));
     source.layout(Rect(cr.x, sourceBar.bottom, cr.w, cr.h - sourceBar.h));
+    if (isDiff) {
+      tab().diff.layout(cr);
+    }
+
     int uw = useFormatButton.preferredWidth();
 
     auto useRect = Rect(sourceBar.right - uw - ui.px(6), sourceBar.y + ui.px(4), uw, sourceBar.h - ui.px(8));
@@ -523,7 +630,7 @@ final class GuiApp {
 
     sourceToggle = Rect(tabsRect.right - ui.px(8) - sw, tabsRect.y + ui.px(5), sw, th);
     treeToggle = Rect(sourceToggle.x - tw, sourceToggle.y, tw, th);
-    if (tabs.length) {
+    if (tabs.length && !isDiff) {
       bool src = tab().sourceMode;
       auto whole = Rect(treeToggle.x, treeToggle.y, tw + sw, th);
 
@@ -653,6 +760,19 @@ final class GuiApp {
     setStatus("Ctrl+S saves as " ~ sf.label ~ ", Save as picks a new name");
     updateTitle();
     ui.invalidate();
+  }
+
+  private void drawNotice(Canvas c) {
+    auto t = ui.theme;
+    auto f = ui.fonts.ui;
+
+    c.fill(noticeRect, mix(t.window, t.accent, 0.22));
+    c.hline(0, noticeRect.w, noticeRect.bottom - 1, t.border);
+    c.text(f, ui.px(12), noticeRect.y + (noticeRect.h - f.lineHeight) / 2,
+      "The file was changed on disk by another program", t.text);
+    foreach (b; [reloadButton, diffButton, dismissButton]) {
+      b.draw(c);
+    }
   }
 
   private void drawWelcome(Canvas c) {
@@ -792,6 +912,19 @@ final class GuiApp {
     auto tb = tab();
 
     if (tb is null) {
+      return res;
+    }
+
+    if (tb.diff !is null) {
+      auto df = tb.diff.diff;
+
+      res ~= Message("A", tb.diff.nameA, 0);
+      res ~= Message("B", tb.diff.nameB, 0);
+      res ~= Message("Result", df.identical ? "documents are the same" : "documents differ", df.identical ? 3 : 4);
+      res ~= Message("Only in A", groupDigits(df.removed), 2);
+      res ~= Message("Only in B", groupDigits(df.added), 2);
+      res ~= Message("Changed", groupDigits(df.changed), 2);
+
       return res;
     }
 
@@ -963,8 +1096,18 @@ final class GuiApp {
       return menuBar;
     }
 
+    foreach (b; [reloadButton, diffButton, dismissButton]) {
+      if (!noticeRect.empty && b.contains(x, y)) {
+        return b;
+      }
+    }
+
     if (!tabs.length) {
       return null;
+    }
+
+    if (tab().diff !is null) {
+      return tab().diff.contains(x, y) ? tab().diff : null;
     }
 
     if (tab().sourceMode) {
@@ -1166,11 +1309,11 @@ final class GuiApp {
   }
 
   private void tabClick(ref Event e) {
-    if (tabs.length && treeToggle.contains(e.x, e.y)) {
+    if (tabs.length && !isDiff && treeToggle.contains(e.x, e.y)) {
       return setSourceMode(false);
     }
 
-    if (tabs.length && sourceToggle.contains(e.x, e.y)) {
+    if (tabs.length && !isDiff && sourceToggle.contains(e.x, e.y)) {
       return setSourceMode(true);
     }
 
@@ -1276,6 +1419,12 @@ final class GuiApp {
     }
 
     if (focus is source && source.keyDown(e)) {
+      return;
+    }
+
+    if (tabs.length && tab().diff !is null) {
+      tab().diff.keyDown(e);
+
       return;
     }
 
@@ -1894,15 +2043,90 @@ final class GuiApp {
         tabs[current] = replacement;
         switchTo(current);
         replacement.startHashing();
+        relayout();
         setStatus("Reloaded " ~ path.baseName);
       } catch (Exception e) {
         showError("Can't reload", e.msg);
       }
     }
-    if (t.doc.modified) {
-      ask("Reload", "Unsaved changes will be lost.", ["Reload", "Cancel"], (b, _) { if (b == 0) run(); });
-    } else {
-      run();
+    if (!t.doc.modified) {
+      return run();
+    }
+
+    ask("Reload", "The document has unsaved changes. Save them to another file first?",
+      ["Save as…", "Discard changes", "Cancel"], (b, _) {
+        if (b == 0) {
+          auto keepPath = t.doc.path;
+
+          saveAsDialog(Format.unknown, () {
+            t.doc.path = keepPath;
+            t.doc.markSaved();
+            run();
+          });
+        } else if (b == 1) {
+          run();
+        }
+      });
+  }
+
+  private void diffWithDisk() {
+    auto t = tab();
+
+    try {
+      auto disk = openDocument(t.doc.path);
+      auto name = t.doc.path.baseName;
+
+      t.rememberDiskState();
+      relayout();
+      openDiff(t.doc, disk, name ~ (t.doc.modified ? " (edited here)" : " (opened)"), name ~ " (on disk)");
+    } catch (Exception e) {
+      showError("Can't compare", e.msg);
+    }
+  }
+
+  void openDiff(Document a, Document b, string nameA, string nameB) {
+    auto view = new DiffView(ui, new Diff(a, b), nameA, nameB);
+    auto t = new DocTab(a);
+
+    t.diff = view;
+    t.diffTitle = nameA.baseName ~ " ⇄ " ~ nameB.baseName;
+    tabs ~= t;
+    switchTo(tabs.length - 1);
+    ui.setFocus(view);
+
+    auto df = view.diff;
+
+    setStatus(df.identical ? "No differences" :
+      format("%s only in A, %s only in B, %s changed", df.removed, df.added, df.changed));
+  }
+
+  private void compareDialog() {
+    auto d = doc();
+
+    if (d is null || tab().diff !is null) {
+      return;
+    }
+
+    auto dir = d.path.length ? d.path.dirName : "";
+
+    runFileDialog(showOpenDialog("Compare with", documentFilters(), dir, window.nativeHandle()), (path) {
+      compareWith(path);
+    }, () {
+      ask("Compare with", "", ["Compare", "Cancel"], (b, vals) {
+        if (b == 0 && vals[0].strip.length) {
+          compareWith(vals[0].strip);
+        }
+      }, ["Path"], [dir.length ? dir ~ "/" : ""]);
+    });
+  }
+
+  private void compareWith(string path) {
+    try {
+      auto d = doc();
+
+      openDiff(d, openDocument(path), d.path.length ? d.path.baseName : "untitled", path);
+    } catch (Exception e) {
+      showError("Can't compare", e.msg);
     }
   }
 
@@ -1923,7 +2147,7 @@ final class GuiApp {
   private void save(void delegate() then = null) {
     auto d = doc();
 
-    if (d is null) {
+    if (d is null || isDiff) {
       return;
     }
 
@@ -1945,6 +2169,8 @@ final class GuiApp {
       return showError("Can't save", err);
     }
 
+    tab().rememberDiskState();
+    relayout();
     setStatus("Saved " ~ path.baseName ~ " as " ~ formatName(d.format));
     updateTitle();
     ui.invalidate();
@@ -2033,6 +2259,7 @@ final class GuiApp {
       item("New", "Ctrl+N", () { newDocument(); }),
       item("Open…", "Ctrl+O", () { openDialog(); }),
       item("Open from clipboard", "Ctrl+Shift+V", () { openFromClipboard(); }),
+      item("Compare with file…", "", () { compareDialog(); }, tabs.length && tab().diff is null),
       item("Reload", "F5", () { reload(); }, hasPath()),
       separator(),
       item("Save", "Ctrl+S", () { save(); }, tabs.length > 0),
@@ -2056,6 +2283,11 @@ final class GuiApp {
       item("Go to path…", "Ctrl+G", () { goToDialog(); }, tabs.length > 0),
       separator(),
       check("Messages panel", "", showMessages, () { showMessages = !showMessages; relayout(); }),
+      check("Only differences", "", isDiff && tab().diff.onlyChanges, () {
+        tab().diff.setOnlyChanges(!tab().diff.onlyChanges);
+      }),
+      item("Next difference", "F7", () { tab().diff.nextDifference(false); }, isDiff),
+      item("Previous difference", "Shift+F7", () { tab().diff.nextDifference(true); }, isDiff),
       separator(),
       item("Next tab", "Ctrl+Tab",
         () { if (tabs.length > 1) switchTo((current + 1) % tabs.length); }, tabs.length > 1),
@@ -2074,6 +2306,10 @@ final class GuiApp {
           ["Close"], null);
       }),
     ]);
+  }
+
+  @property private bool isDiff() {
+    return tabs.length && tab().diff !is null;
   }
 
   private bool hasPath() { return tabs.length && doc().path.length; }

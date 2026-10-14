@@ -13,7 +13,7 @@ import view.stats;
 enum appVersion = "1.0.0";
 
 int main(string[] args) {
-  bool tui, gui, stats, compact, tabs, kvTypes, showVersion;
+  bool tui, gui, stats, compact, tabs, kvTypes, showVersion, compare;
   string convertTo, output, inputFormat;
   int indent = 4;
 
@@ -31,6 +31,7 @@ int main(string[] args) {
       "compact", "Write JSON without whitespace", &compact,
       "kv-types", "Write KeyValues strings that look like numbers or booleans as typed values", &kvTypes,
       "stats|s", "Print file statistics and hashes", &stats,
+      "diff|d", "Compare two files, prints the differences without a display", &compare,
       "version|v", "Print version", &showVersion,
     );
   } catch (Exception e) {
@@ -119,6 +120,22 @@ int main(string[] args) {
     return 0;
   }
 
+  if (compare) {
+    if (docs.length != 2) {
+      stderr.writeln("--diff needs two files");
+
+      return 1;
+    }
+
+    if (tui || (!gui && !displayAvailable()) || !stdoutIsTerminal()) {
+      return printDiff(docs[0], docs[1]);
+    }
+
+    import gui.app : runGui;
+
+    return runGui(docs, true);
+  }
+
   if (tui || (!gui && !displayAvailable())) {
     import tui.app : runTui;
 
@@ -199,6 +216,60 @@ private void printStats(Document doc) {
   writeln("  Parsing:     ", format("%.3f s", doc.parseTime));
   if (doc.error.length) {
     writeln("  Error:       ", doc.error);
+  }
+}
+
+private int printDiff(Document a, Document b) {
+  import view.actions : valuePreview;
+  import view.diff : Diff, DiffStatus;
+
+  auto d = new Diff(a, b);
+
+  void walk(uint e) {
+    auto en = d.entries[e];
+
+    final switch (en.status) {
+      case DiffStatus.same:
+        return;
+      case DiffStatus.added:
+        writeln("+ ", b.pathOf(en.b), "  ", valuePreview(b, en.b, 80));
+
+        return;
+      case DiffStatus.removed:
+        writeln("- ", a.pathOf(en.a), "  ", valuePreview(a, en.a, 80));
+
+        return;
+      case DiffStatus.changed:
+        auto children = d.childrenOf(e);
+
+        if (!children.length) {
+          writeln("~ ", a.pathOf(en.a), "  ", valuePreview(a, en.a, 80), " -> ", valuePreview(b, en.b, 80));
+        }
+
+        foreach (c; children) {
+          walk(c);
+        }
+
+        return;
+    }
+  }
+
+  walk(0);
+
+  return d.identical ? 0 : 1;
+}
+
+private bool stdoutIsTerminal() {
+  version (Windows) {
+    import core.sys.windows.windows;
+
+    DWORD mode;
+
+    return GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) != 0;
+  } else {
+    import core.sys.posix.unistd : isatty;
+
+    return isatty(1) != 0;
   }
 }
 
