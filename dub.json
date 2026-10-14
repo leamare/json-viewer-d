@@ -7,5 +7,15 @@
   "targetName": "jsonview",
   "targetPath": "bin",
   "libs-linux": ["X11"],
-  "libs-windows": ["user32", "gdi32", "comdlg32", "shell32", "advapi32"]
+  "libs-windows": ["user32", "gdi32", "comdlg32", "shell32", "advapi32"],
+  "configurations": [
+    {
+      "name": "application"
+    },
+    {
+      "name": "unittest",
+      "sourcePaths": ["source", "tests"],
+      "importPaths": ["source", "tests"]
+    }
+  ]
 }

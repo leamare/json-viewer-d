@@ -161,7 +161,7 @@ final class Terminal {
     return ev.key != Key.none;
   }
 
-  private static size_t parse(const(ubyte)[] b, ref KeyEvent ev) {
+  static size_t parse(const(ubyte)[] b, ref KeyEvent ev) {
     ubyte c = b[0];
 
     if (c == 0x1b) {
