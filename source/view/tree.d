@@ -242,18 +242,26 @@ final class TreeModel {
     return f;
   }
 
-  const(uint)[] visibleChildren(uint node) {
+  void visibleChildren(uint node, out const(uint)[] ids, out const(uint)[] indices) {
     if (auto f = filterOf(node)) {
-      return f.ids;
+      ids = f.ids;
+      indices = f.indices;
+
+      return;
     }
 
-    uint[] res;
+    uint[] all, at;
+    uint k = 0;
 
+    all.reserve(doc.nodes[node].len);
+    at.reserve(doc.nodes[node].len);
     foreach (c; doc.children(node)) {
-      res ~= c;
+      all ~= c;
+      at ~= k++;
     }
 
-    return res;
+    ids = all;
+    indices = at;
   }
 
   private void evaluate(uint node, ref ChildFilter f) {

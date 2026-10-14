@@ -14,6 +14,7 @@ import formats;
 import gui.dialog;
 import gui.menu;
 import gui.sourceview;
+import gui.tableview;
 import gui.textedit;
 import gui.treegrid;
 import gui.ui;
@@ -140,6 +141,7 @@ final class GuiApp {
   private TreeGrid grid;
   private TextEdit details;
   private SourceView source;
+  private TableView table;
   private LineEdit search;
   private Dialog dialog;
   private Button applyButton, revertButton, embedButton, useFormatButton;
@@ -151,6 +153,7 @@ final class GuiApp {
   private Rect[] tabRects, tabCloseRects;
   private Rect treeToggle, sourceToggle;
   private Rect sourceBar;
+  private Rect tableToggle, textToggle;
   private Rect[] sourceFormatRects;
   private float mainSplit = 0.42;
   private int messagesLines = 7;
@@ -167,6 +170,8 @@ final class GuiApp {
   private bool detailsDirty;
   private bool detailsTruncated;
   private bool detailsAsText;
+  private bool detailsTable = true;
+  private bool showingTable;
 
   private FileDialog pendingDialog;
 
@@ -199,6 +204,11 @@ final class GuiApp {
     details.onSubmit = () { applyDetails(); };
 
     source = new SourceView(ui);
+    table = new TableView(ui);
+    table.onOpen = (n) {
+      grid.reveal(n);
+      ui.setFocus(grid);
+    };
 
     search = new LineEdit(ui);
     search.placeholder = "Find in keys and values (Ctrl+F)";
@@ -455,9 +465,16 @@ final class GuiApp {
     detailsHeader = Rect(rx, cr.y, cr.right - rx, row + ui.px(4));
     detailsStatus = Rect(rx, cr.bottom - row, cr.right - rx, row);
     details.layout(Rect(rx, detailsHeader.bottom, detailsHeader.w, detailsStatus.y - detailsHeader.bottom));
+    table.layout(details.rect);
 
     int bh = row;
     int bx = detailsHeader.right - ui.px(4);
+    auto f = ui.fonts.ui;
+    int textW = f.measure("Text") + ui.px(20), tableW = f.measure("Table") + ui.px(20);
+
+    textToggle = Rect(bx - textW, detailsHeader.y + (detailsHeader.h - bh) / 2, textW, bh);
+    tableToggle = Rect(textToggle.x - tableW, textToggle.y, tableW, bh);
+    bx = tableToggle.x - ui.px(10);
 
     foreach (b; [revertButton, applyButton]) {
       int bw = b.preferredWidth() - ui.px(20);
@@ -700,20 +717,29 @@ final class GuiApp {
       embedButton.draw(c);
     }
 
-    details.draw(c);
+    bool container = detailsNode != noNode && detailsNode < d.length && d[detailsNode].isContainer;
+
+    if (container) {
+      drawDetailsToggle(c);
+    }
 
     auto f = ui.fonts.small;
+    string info;
+
+    if (showingTable) {
+      table.draw(c);
+      info = format("%s rows, %s columns   Double click shows the element in the tree",
+        groupDigits(table.rowCount), table.columnCount);
+    } else {
+      details.draw(c);
+      auto caret = details.caret;
+
+      info = format("Ln %s, Col %s   Lines: %s", caret.line + 1, caret.col + 1, details.lineCount);
+    }
 
     c.fill(detailsStatus, t.window);
-    auto caret = details.caret;
-    string info = format("Ln %s, Col %s   Lines: %s", caret.line + 1, caret.col + 1, details.lineCount);
-
-    if (details.readOnly && detailsTruncated) {
-      info ~= "   Preview is cut, the element is too big to edit here";
-    } else if (details.readOnly) {
-      info ~= "   Read only";
-    } else if (detailsDirty) {
-      info ~= "   Modified, Ctrl+Enter applies";
+    if (!showingTable) {
+      info ~= textState();
     }
 
     c.text(f, detailsStatus.x + ui.px(8), detailsStatus.y + (detailsStatus.h - f.lineHeight) / 2,
@@ -721,6 +747,44 @@ final class GuiApp {
     c.frame(
       Rect(detailsHeader.x, detailsHeader.y, detailsHeader.w, detailsStatus.bottom - detailsHeader.y),
       t.border);
+  }
+
+  private string textState() {
+    if (details.readOnly && detailsTruncated) {
+      return "   Preview is cut, the element is too big to edit here";
+    }
+
+    if (details.readOnly) {
+      return "   Read only";
+    }
+
+    return detailsDirty ? "   Modified, Ctrl+Enter applies" : null;
+  }
+
+  private void drawDetailsToggle(Canvas c) {
+    auto t = ui.theme;
+    auto f = ui.fonts.ui;
+    auto whole = Rect(tableToggle.x, tableToggle.y, textToggle.right - tableToggle.x, tableToggle.h);
+
+    c.roundRect(whole, ui.px(4), t.button, t.border);
+    c.roundRect((showingTable ? tableToggle : textToggle).shrink(ui.px(2)), ui.px(3), t.selection);
+    foreach (k, r; [tableToggle, textToggle]) {
+      bool active = (k == 0) == showingTable;
+
+      c.text(f, r.x + ui.px(10), r.y + (r.h - f.lineHeight) / 2, k == 0 ? "Table" : "Text",
+        active ? t.selectionText : t.text);
+    }
+  }
+
+  private void setDetailsTable(bool on) {
+    if (detailsDirty) {
+      return setStatus("Apply or revert the changes first", true);
+    }
+
+    detailsTable = on;
+    detailsNode = noNode;
+    loadDetails();
+    ui.invalidate();
   }
 
   private Message[] messages() {
@@ -911,7 +975,9 @@ final class GuiApp {
       return source.contains(x, y) ? source : null;
     }
 
-    foreach (w; [cast(Widget)applyButton, revertButton, embedButton, grid, search, details]) {
+    Widget body = showingTable ? table : details;
+
+    foreach (w; [cast(Widget)applyButton, revertButton, embedButton, grid, search, body]) {
       if (w.contains(x, y)) {
         return w;
       }
@@ -959,6 +1025,16 @@ final class GuiApp {
       dragging = 2;
 
       return;
+    }
+
+    if (tabs.length && !tab().sourceMode && detailsNode != noNode && doc()[detailsNode].isContainer) {
+      if (tableToggle.contains(e.x, e.y)) {
+        return setDetailsTable(true);
+      }
+
+      if (textToggle.contains(e.x, e.y)) {
+        return setDetailsTable(false);
+      }
     }
 
     if (messagesHeader.contains(e.x, e.y)) {
@@ -1362,6 +1438,19 @@ final class GuiApp {
     }
 
     auto n = &d.nodes[detailsNode];
+
+    showingTable = detailsTable && n.isContainer;
+    if (showingTable) {
+      const(uint)[] ids, indices;
+
+      grid.tree.visibleChildren(detailsNode, ids, indices);
+      table.setNode(d, detailsNode, ids, indices);
+      details.setText("");
+      detailsAsText = false;
+      updateDetailsButtons();
+
+      return;
+    }
 
     detailsAsText = n.type == NodeType.string;
     string text;
