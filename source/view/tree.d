@@ -4,10 +4,19 @@ import std.array : insertInPlace;
 import std.range : assumeSorted;
 
 import doc.document;
+import view.search : Filter, parseFilter, matchesFilter;
 
 struct Row {
   uint node;
   uint depth;
+  uint index;
+}
+
+struct ChildFilter {
+  Filter filter;
+  uint[] ids;
+  uint[] indices;
+  bool dirty;
 }
 
 enum size_t noRow = size_t.max;
@@ -20,8 +29,14 @@ final class TreeModel {
   size_t cursor;
   size_t top;
 
+  private ChildFilter[uint] filters;
+  private uint pathNode = noNode;
+  private ulong pathRevision;
+  private string path;
+
   this(Document doc) {
     this.doc = doc;
+    doc.onShift ~= &shifted;
     rebuild();
   }
 
@@ -32,7 +47,7 @@ final class TreeModel {
     rows.length = 0;
     rows.assumeSafeAppend();
     if (!doc.empty) {
-      collect(0, 0, rows);
+      collect(0, 0, 0, rows);
     }
 
     if (cursor >= rows.length) {
@@ -63,7 +78,7 @@ final class TreeModel {
     n.set(NodeFlags.expanded);
     Row[] sub;
 
-    collect(id, rows[r].depth, sub);
+    collect(id, rows[r].depth, rows[r].index, sub);
     rows.insertInPlace(r + 1, sub[1 .. $]);
   }
 
@@ -99,7 +114,7 @@ final class TreeModel {
     removeSubRows(r);
     Row[] sub;
 
-    collect(id, rows[r].depth, sub);
+    collect(id, rows[r].depth, rows[r].index, sub);
     rows.insertInPlace(r + 1, sub[1 .. $]);
   }
 
@@ -115,7 +130,7 @@ final class TreeModel {
 
   size_t rowOf(uint node) const {
     auto sorted = rows.assumeSorted!((a, b) => a.node < b.node);
-    auto idx = sorted.lowerBound(Row(node, 0)).length;
+    auto idx = sorted.lowerBound(Row(node, 0, 0)).length;
 
     if (idx < rows.length && rows[idx].node == node) {
       return idx;
@@ -124,29 +139,154 @@ final class TreeModel {
     return noRow;
   }
 
-  void reveal(uint node) {
+  void reveal(uint node, bool keepFilters = false) {
     if (node == noNode || node >= doc.length) {
       return;
     }
 
     bool changed;
+    uint child = node;
 
     for (auto p = doc.nodes[node].parent; p != noNode; p = doc.nodes[p].parent) {
       if (!doc.nodes[p].has(NodeFlags.expanded)) {
         doc.nodes[p].set(NodeFlags.expanded);
         changed = true;
       }
+
+      if (auto f = keepFilters ? null : p in filters) {
+        if (f.dirty) {
+          evaluate(p, *f);
+        }
+
+        if (!hasId(f.ids, child)) {
+          filters.remove(p);
+          changed = true;
+        }
+      }
+
+      child = p;
     }
 
     if (changed) {
       rebuild();
     }
 
-    auto r = rowOf(node);
+    for (auto n = node; n != noNode; n = doc.nodes[n].parent) {
+      auto r = rowOf(n);
 
-    if (r != noRow) {
-      cursor = r;
+      if (r != noRow) {
+        cursor = r;
+        break;
+      }
     }
+  }
+
+  size_t setFilter(uint node, string text) {
+    auto f = ChildFilter(parseFilter(text));
+
+    if (f.filter.empty) {
+      clearFilter(node);
+
+      return doc.nodes[node].len;
+    }
+
+    evaluate(node, f);
+    filters[node] = f;
+    doc.nodes[node].set(NodeFlags.expanded);
+    rebuild();
+
+    return f.ids.length;
+  }
+
+  void clearFilter(uint node) {
+    if (filters.remove(node)) {
+      rebuild();
+    }
+  }
+
+  const(ChildFilter)* filterOf(uint node) {
+    auto f = node in filters;
+
+    if (f !is null && f.dirty) {
+      evaluate(node, *f);
+    }
+
+    return f;
+  }
+
+  const(uint)[] visibleChildren(uint node) {
+    if (auto f = filterOf(node)) {
+      return f.ids;
+    }
+
+    uint[] res;
+
+    foreach (c; doc.children(node)) {
+      res ~= c;
+    }
+
+    return res;
+  }
+
+  private void evaluate(uint node, ref ChildFilter f) {
+    f.ids.length = 0;
+    f.indices.length = 0;
+    uint index = 0;
+
+    foreach (c; doc.children(node)) {
+      if (matchesFilter(doc, c, f.filter)) {
+        f.ids ~= c;
+        f.indices ~= index;
+      }
+
+      index++;
+    }
+
+    f.dirty = false;
+  }
+
+  private void shifted(uint start, uint oldEnd, long delta) {
+    ChildFilter[uint] moved;
+
+    foreach (id, f; filters) {
+      if (id >= oldEnd) {
+        foreach (ref c; f.ids) {
+          c = cast(uint)(c + delta);
+        }
+
+        moved[cast(uint)(id + delta)] = f;
+      } else if (id < start) {
+        if (doc.nodes[id].end >= start) {
+          f.dirty = true;
+        }
+
+        moved[id] = f;
+      }
+    }
+
+    filters = moved;
+  }
+
+  private static bool hasId(const(uint)[] ids, uint id) {
+    auto sorted = ids.assumeSorted;
+
+    return sorted.contains(id);
+  }
+
+  string selectedPath() {
+    auto sel = selected;
+
+    if (sel == noNode) {
+      return null;
+    }
+
+    if (sel != pathNode || doc.revision != pathRevision) {
+      path = doc.pathOf(sel);
+      pathNode = sel;
+      pathRevision = doc.revision;
+    }
+
+    return path;
   }
 
   size_t parentRow(size_t r) const {
@@ -165,13 +305,13 @@ final class TreeModel {
       focus = cast(uint)doc.length - 1;
     }
 
-    reveal(focus);
+    reveal(focus, true);
   }
 
   private void removeSubRows(size_t r) {
     auto end = doc.nodes[rows[r].node].end;
     auto sorted = rows[r + 1 .. $].assumeSorted!((a, b) => a.node < b.node);
-    auto count = sorted.lowerBound(Row(end, 0)).length;
+    auto count = sorted.lowerBound(Row(end, 0, 0)).length;
 
     if (!count) {
       return;
@@ -186,34 +326,53 @@ final class TreeModel {
     rows = rows[0 .. r + 1] ~ rows[r + 1 + count .. $];
   }
 
-  private void collect(uint start, uint depth, ref Row[] output) const {
+  private void collect(uint start, uint depth, uint index, ref Row[] output) {
     static struct Frame {
       uint next;
       uint end;
       uint depth;
+      uint index;
+      const(ChildFilter)* filter;
     }
 
-    output ~= Row(start, depth);
+    Frame open(uint node, uint d) {
+      return Frame(node + 1, doc.nodes[node].end, d, 0, filterOf(node));
+    }
+
+    output ~= Row(start, depth, index);
     if (!expandedContainer(start)) {
       return;
     }
 
-    Frame[] stack = [Frame(start + 1, doc.nodes[start].end, depth + 1)];
+    Frame[] stack = [open(start, depth + 1)];
 
     while (stack.length) {
-      auto f = stack[$ - 1];
+      auto f = &stack[$ - 1];
+      uint c, at;
 
-      if (f.next >= f.end) {
-        stack.length--;
-        continue;
+      if (f.filter !is null) {
+        if (f.index >= f.filter.ids.length) {
+          stack.length--;
+          continue;
+        }
+
+        c = f.filter.ids[f.index];
+        at = f.filter.indices[f.index];
+      } else {
+        if (f.next >= f.end) {
+          stack.length--;
+          continue;
+        }
+
+        c = f.next;
+        at = f.index;
+        f.next = doc.nodes[c].end;
       }
 
-      auto c = f.next;
-
-      stack[$ - 1].next = doc.nodes[c].end;
-      output ~= Row(c, f.depth);
+      f.index++;
+      output ~= Row(c, f.depth, at);
       if (expandedContainer(c)) {
-        stack ~= Frame(c + 1, doc.nodes[c].end, f.depth + 1);
+        stack ~= open(c, f.depth + 1);
       }
     }
   }

@@ -245,23 +245,41 @@ final class Document {
 
   @property bool modified() const { return currentState != savedState; }
   @property ulong revision() const { return changes; }
-  @property bool canUndo() const { return undoList.length > 0; }
+  @property bool canUndo() const { return currentState != 0; }
   @property bool canRedo() const { return redoList.length > 0; }
 
   void markSaved() { savedState = currentState; }
 
   private ulong currentState() const {
-    return undoList.length ? undoList[$ - 1].id : 0;
+    foreach_reverse (ref c; undoList) {
+      if (!c.silent) {
+        return c.id;
+      }
+    }
+
+    return 0;
   }
+
+  /// Called after nodes [start, oldEnd) were replaced and everything after
+  /// them moved by delta, so views can fix indices they keep
+  void delegate(uint start, uint oldEnd, long delta)[] onShift;
 
   /// Replaces `count` nodes at `start` (complete sibling subtrees of `parent`)
   /// with `fresh` nodes. Fresh nodes use local indices: parent/end are
   /// relative to the start of the fresh array, top level nodes have no parent.
-  void replace(uint parent, uint start, uint count, const(Node)[] fresh) {
+  /// Silent changes are view things like opening JSON inside a string, they
+  /// don't make the document modified.
+  void replace(uint parent, uint start, uint count, const(Node)[] fresh, bool silent = false) {
     auto c = Change(parent, start, count, fresh.dup, false);
 
-    redoList.length = 0;
-    pushUndo(apply(c));
+    if (!silent) {
+      redoList.length = 0;
+    }
+
+    auto back = apply(c);
+
+    back.silent = silent;
+    pushUndo(back);
   }
 
   void patch(uint i, Node n) {
@@ -278,6 +296,11 @@ final class Document {
   }
 
   uint undo() {
+    while (undoList.length && undoList[$ - 1].silent) {
+      apply(undoList[$ - 1]);
+      undoList.length--;
+    }
+
     if (!undoList.length) {
       return noNode;
     }
@@ -321,6 +344,7 @@ final class Document {
     Node[] nodes;
     bool patch;
     ulong id;
+    bool silent;
   }
 
   private Change apply(Change c) {
@@ -337,6 +361,11 @@ final class Document {
     }
 
     auto removed = replaceRange(c.parent, c.start, c.count, c.nodes);
+    long delta = cast(long)c.nodes.length - c.count;
+
+    foreach (listener; onShift) {
+      listener(c.start, c.start + c.count, delta);
+    }
 
     return Change(c.parent, c.start, cast(uint)c.nodes.length, removed, false);
   }

@@ -830,7 +830,9 @@ final class GuiApp {
     auto sel = grid.tree !is null ? grid.tree.selected : noNode;
 
     if (sel != noNode) {
-      c.textFit(f, leftW + ui.px(10), ty, d.pathOf(sel), t.text, statusRect.w - leftW - rw - ui.px(40));
+      auto pathW = statusRect.w - leftW - rw - ui.px(40);
+
+      c.textFit(f, leftW + ui.px(10), ty, grid.tree.selectedPath, t.text, pathW);
     }
   }
 

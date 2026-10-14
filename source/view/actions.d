@@ -159,7 +159,7 @@ string embeddedFormatName(in Node n) {
   }
 }
 
-string nodeLabel(const Document doc, uint i, size_t maxLen = 256) {
+string nodeLabel(const Document doc, uint i, size_t maxLen = 256, size_t index = size_t.max) {
   import std.conv : to;
 
   if (doc.nodes[i].parent == noNode) {
@@ -176,7 +176,7 @@ string nodeLabel(const Document doc, uint i, size_t maxLen = 256) {
     return doc.key(i, maxLen);
   }
 
-  return "[" ~ doc.indexInParent(i).to!string ~ "]";
+  return "[" ~ (index == size_t.max ? doc.indexInParent(i) : index).to!string ~ "]";
 }
 
 string valuePreview(const Document doc, uint i, size_t maxLen = 256) {

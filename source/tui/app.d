@@ -899,7 +899,7 @@ private final class TuiApp {
     }
 
     auto sel = tree.selected;
-    auto status = sel == noNode ? "" : doc.pathOf(sel);
+    auto status = sel == noNode ? "" : tree.selectedPath;
 
     auto kind = sel == noNode ? "" : describeNode(doc, sel) ~ "  " ~ (tree.cursor + 1).to!string ~
       "/" ~ tree.length.to!string ~ " ";
@@ -946,7 +946,7 @@ private final class TuiApp {
       x = screen.put(x, y, marker, dimStyle, treeX + keyW);
 
       bool isIndex = !doc.hasKey(n) && node.parent != noNode;
-      auto label = nodeLabel(doc, n, 200);
+      auto label = nodeLabel(doc, n, 200, row.index);
 
       x = screen.put(x, y, label, isIndex ? indexStyle : keyStyle, treeX + keyW - 1);
       if (node.has(NodeFlags.embedded)) {

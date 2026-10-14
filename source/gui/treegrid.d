@@ -149,7 +149,7 @@ final class TreeGrid : Widget {
 
     c.pushClip(Rect(row.x, row.y, sx - row.x - ui.px(2), row.h));
     bool isIndex = !doc.hasKey(id) && n.parent != noNode;
-    auto label = nodeLabel(doc, id, 300);
+    auto label = nodeLabel(doc, id, 300, rowInfo.index);
     auto font = n.parent == noNode ? ui.fonts.bold : f;
     int lx = ix + ui.px(18);
     int end = c.textFit(font, lx, ty, label, isIndex && !selected ? t.dimText : fg, sx - lx - ui.px(6));
