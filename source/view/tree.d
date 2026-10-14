@@ -30,6 +30,9 @@ final class TreeModel {
   size_t top;
 
   private ChildFilter[uint] filters;
+  private bool[uint] failed;
+
+  enum autoOpenLimit = 20_000;
   private uint pathNode = noNode;
   private ulong pathRevision;
   private string path;
@@ -47,6 +50,7 @@ final class TreeModel {
     rows.length = 0;
     rows.assumeSafeAppend();
     if (!doc.empty) {
+      prepareVisible(0);
       collect(0, 0, 0, rows);
     }
 
@@ -79,6 +83,45 @@ final class TreeModel {
     return n.type == NodeType.string && rawLooksLikeJson(doc.valueRaw(i), n.valueSyntax);
   }
 
+  bool prepareChildren(uint node) {
+    import doc.edit : expandEmbedded;
+
+    if (!doc.nodes[node].isContainer || doc.nodes[node].len > autoOpenLimit) {
+      return false;
+    }
+
+    bool any = false;
+
+    for (uint c = node + 1; c < doc.nodes[node].end; c = doc.nodes[c].end) {
+      if (c in failed || !holdsDocument(c)) {
+        continue;
+      }
+
+      if (expandEmbedded(doc, c).length) {
+        failed[c] = true;
+        continue;
+      }
+
+      doc.nodes[c].set(NodeFlags.expanded, false);
+      any = true;
+    }
+
+    return any;
+  }
+
+  private void prepareVisible(uint node) {
+    prepareChildren(node);
+    if (!expandedContainer(node)) {
+      return;
+    }
+
+    for (uint c = node + 1; c < doc.nodes[node].end; c = doc.nodes[c].end) {
+      if (expandedContainer(c)) {
+        prepareVisible(c);
+      }
+    }
+  }
+
   string expand(size_t r) {
     auto id = rows[r].node;
     auto n = &doc.nodes[id];
@@ -100,6 +143,13 @@ final class TreeModel {
     }
 
     n.set(NodeFlags.expanded);
+
+    if (prepareChildren(id)) {
+      rebuild();
+
+      return null;
+    }
+
     Row[] sub;
 
     collect(id, rows[r].depth, rows[r].index, sub);
@@ -139,11 +189,7 @@ final class TreeModel {
       }
     }
 
-    removeSubRows(r);
-    Row[] sub;
-
-    collect(id, rows[r].depth, rows[r].index, sub);
-    rows.insertInPlace(r + 1, sub[1 .. $]);
+    rebuild();
   }
 
   void collapseAll(size_t r) {
@@ -282,6 +328,25 @@ final class TreeModel {
   }
 
   private void shifted(uint start, uint oldEnd, long delta) {
+    // rows stay usable when a string inside them is opened as a document
+    foreach (ref row; rows) {
+      if (row.node >= oldEnd) {
+        row.node = cast(uint)(row.node + delta);
+      }
+    }
+
+    bool[uint] stillFailed;
+
+    foreach (id, _; failed) {
+      if (id >= oldEnd) {
+        stillFailed[cast(uint)(id + delta)] = true;
+      } else if (id < start) {
+        stillFailed[id] = true;
+      }
+    }
+
+    failed = stillFailed;
+
     ChildFilter[uint] moved;
 
     foreach (id, f; filters) {

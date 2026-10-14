@@ -478,6 +478,10 @@ final class GuiApp {
   }
 
   private void draw() {
+    if (tabs.length && showingTable && !isDiff && !tab().sourceMode) {
+      table.prepareVisible();
+    }
+
     syncWithDocument();
     ui.dirty = false;
     auto c = ui.canvas;
@@ -1593,8 +1597,9 @@ final class GuiApp {
     if (showingTable) {
       const(uint)[] ids, indices;
 
+      grid.tree.prepareChildren(detailsNode);
       grid.tree.visibleChildren(detailsNode, ids, indices);
-      table.setNode(d, detailsNode, ids, indices);
+      table.setNode(d, grid.tree, detailsNode, ids, indices);
       details.setText("");
       detailsAsText = false;
       updateDetailsButtons();

@@ -1,20 +1,27 @@
 module gui.tableview;
 
-import std.algorithm : min, max;
+import std.algorithm : canFind, min, max, startsWith;
+import std.conv : to;
 
 import doc.document;
+import doc.edit : expandEmbedded, stripSlashes;
 import gui.ui;
-import view.actions : describeNode, nodeLabel, valuePreview;
+import view.actions : containerSummary, describeNode, nodeLabel, valuePreview;
+import view.tree : TreeModel;
 
 final class TableView : Widget {
   void delegate(uint) onOpen;
 
   private Document doc;
+  private TreeModel tree;
   private uint node = noNode;
-  private const(uint)[] rows;
+  private uint[] rows;
   private const(uint)[] indices;
   private Column[] columns;
+  private Column[] originals;
   private bool byKeys;
+  private string[uint] summaries;
+  private Document listening;
 
   private size_t cursor;
   private size_t top;
@@ -27,12 +34,15 @@ final class TableView : Widget {
 
   private static struct Column {
     string title;
-    string key;
+    string[] path;
     int width;
+    bool expandable;
+    int origin = -1;
   }
 
   private enum maxColumns = 100;
   private enum sampleRows = 500;
+  private enum prepareRows = 5000;
 
   this(Ui ui) {
     super(ui);
@@ -42,35 +52,57 @@ final class TableView : Widget {
 
   @property size_t rowCount() const { return rows.length; }
   @property size_t columnCount() const { return columns.length; }
-  @property bool keyColumns() const { return byKeys; }
 
   @property int rowH() { return ui.rowHeight; }
   @property int headerH() { return ui.rowHeight + ui.px(2); }
   @property int barSize() { return ui.px(12); }
   @property int visibleRows() { return max(1, (rect.h - headerH - barSize) / rowH); }
 
-  void setNode(Document d, uint n, const(uint)[] children, const(uint)[] childIndices) {
-    bool same = d is doc && n == node;
+  void setNode(Document d, TreeModel t, uint n, const(uint)[] children, const(uint)[] childIndices) {
+    bool same = d is doc && n == node && columns.length;
 
     doc = d;
+    tree = t;
     node = n;
-    rows = children;
+    rows = children.dup;
     indices = childIndices;
+    summaries = null;
+    if (listening !is d) {
+      d.onShift ~= &shifted;
+      listening = d;
+    }
+
     if (!same) {
       cursor = 0;
       top = 0;
       scrollX = 0;
+      buildColumns();
+    } else {
+      markExpandable();
     }
 
     cursor = min(cursor, rows.length ? rows.length - 1 : 0);
-    buildColumns();
     ui.invalidate();
+  }
+
+  private void shifted(uint start, uint oldEnd, long delta) {
+    if (doc !is listening) {
+      return;
+    }
+
+    foreach (ref r; rows) {
+      if (r >= oldEnd) {
+        r = cast(uint)(r + delta);
+      }
+    }
+
+    summaries = null;
   }
 
   private void buildColumns() {
     columns.length = 0;
+    originals.length = 0;
 
-    auto f = ui.fonts.ui;
     size_t objects;
     auto sample = rows[0 .. min(rows.length, sampleRows)];
 
@@ -84,57 +116,110 @@ final class TableView : Widget {
 
     auto first = doc.nodes[node].type == NodeType.array ? "#" : "Key";
 
-    columns ~= Column(first, null, f.measure(first) + ui.px(24));
+    columns ~= Column(first);
     if (byKeys) {
-      bool[string] seen;
+      foreach (key; keysOf(sample)) {
+        columns ~= Column(key, [key]);
+      }
+    } else {
+      columns ~= Column("Value");
+      columns ~= Column("Type");
+    }
 
-      foreach (c; sample) {
-        if (doc.nodes[c].type != NodeType.object) {
+    markExpandable();
+    foreach (ci; 0 .. columns.length) {
+      fitWidth(ci);
+    }
+  }
+
+  private string[] keysOf(const(uint)[] list) {
+    string[] keys;
+    bool[string] seen;
+
+    foreach (c; list) {
+      if (c == noNode || doc.nodes[c].type != NodeType.object) {
+        continue;
+      }
+
+      foreach (k; doc.children(c)) {
+        auto key = doc.key(k);
+
+        if (key in seen || keys.length >= maxColumns) {
           continue;
         }
 
-        foreach (k; doc.children(c)) {
-          auto key = doc.key(k);
-
-          if (key in seen || columns.length > maxColumns) {
-            continue;
-          }
-
-          seen[key] = true;
-          columns ~= Column(key, key, 0);
-        }
+        seen[key] = true;
+        keys ~= key;
       }
-    } else {
-      columns ~= Column("Value", null, 0);
-      columns ~= Column("Type", null, 0);
     }
 
-    foreach (ci, ref col; columns) {
-      int w = f.measure(col.title) + ui.px(20);
+    return keys;
+  }
 
-      foreach (r; 0 .. min(rows.length, 50)) {
-        w = max(w, f.measure(cellText(r, ci, 120)) + ui.px(16));
+  private void fitWidth(size_t ci) {
+    auto f = ui.fonts.ui;
+    int buttons = (columns[ci].expandable ? 1 : 0) + (columns[ci].origin >= 0 ? 1 : 0);
+    int w = f.measure(columns[ci].title) + ui.px(20 + buttons * 20);
+
+    foreach (r; 0 .. min(rows.length, 50)) {
+      w = max(w, f.measure(cellText(r, ci, 120)) + ui.px(16));
+    }
+
+    columns[ci].width = min(max(w, ui.px(48)), ui.px(ci == 0 ? 160 : 320));
+  }
+
+  private void markExpandable() {
+    foreach (ci, ref col; columns) {
+      col.expandable = false;
+      if (!col.path.length) {
+        continue;
       }
 
-      col.width = min(max(w, ui.px(48)), ui.px(ci == 0 ? 160 : 320));
+      foreach (r; 0 .. min(rows.length, 100)) {
+        auto n = cellNode(r, ci);
+
+        if (n != noNode && (doc.nodes[n].isContainer || tree.holdsDocument(n))) {
+          col.expandable = true;
+          break;
+        }
+      }
     }
   }
 
   private uint cellNode(size_t r, size_t ci) {
-    auto row = rows[r];
+    auto cur = rows[r];
 
     if (!byKeys || ci == 0) {
-      return row;
+      return cur;
     }
 
-    if (doc.nodes[row].type != NodeType.object) {
-      return ci == 1 ? row : noNode;
+    foreach (step; columns[ci].path) {
+      cur = child(cur, step);
+      if (cur == noNode) {
+        return noNode;
+      }
     }
 
-    auto key = columns[ci].key;
+    return cur;
+  }
 
-    foreach (k; doc.children(row)) {
-      if (doc.key(k) == key) {
+  private uint child(uint parent, string step) {
+    auto p = &doc.nodes[parent];
+
+    if (p.type == NodeType.array && step.length > 2 && step[0] == '[') {
+      try {
+        return doc.childAt(parent, step[1 .. $ - 1].to!size_t);
+      } catch (Exception) {
+        return noNode;
+      }
+    }
+
+    if (p.type != NodeType.object) {
+      return noNode;
+    }
+
+    foreach (k; doc.children(parent)) {
+      if (doc.key(k) == step) {
         return k;
       }
     }
@@ -150,12 +235,170 @@ final class TableView : Widget {
     }
 
     if (!byKeys) {
-      return ci == 1 ? valuePreview(doc, row, maxLen) : describeNode(doc, row);
+      return ci == 1 ? valueText(row, maxLen) : describeNode(doc, row);
     }
 
     auto n = cellNode(r, ci);
 
-    return n == noNode ? null : valuePreview(doc, n, maxLen);
+    return n == noNode ? null : valueText(n, maxLen);
+  }
+
+  private string valueText(uint n, size_t maxLen) {
+    if (doc.nodes[n].isContainer) {
+      return containerSummary(doc, n, maxLen);
+    }
+
+    if (tree.holdsDocument(n)) {
+      return blobSummary(n, maxLen);
+    }
+
+    return valuePreview(doc, n, maxLen);
+  }
+
+  private string blobSummary(uint n, size_t maxLen) {
+    import formats : documentFromText;
+
+    if (auto s = n in summaries) {
+      return *s;
+    }
+
+    string res;
+
+    try {
+      auto text = doc.value(n);
+      auto inner = documentFromText(text);
+
+      if (inner.error.length && text.canFind(`\"`)) {
+        inner = documentFromText(stripSlashes(text));
+      }
+
+      res = inner.error.length ? valuePreview(doc, n, maxLen) : containerSummary(inner, 0, maxLen);
+    } catch (Exception) {
+      res = valuePreview(doc, n, maxLen);
+    }
+
+    summaries[n] = res;
+
+    return res;
+  }
+
+  void expandColumn(size_t ci) {
+    auto path = columns[ci].path;
+    uint[] cells;
+
+    foreach (r; 0 .. min(rows.length, prepareRows)) {
+      auto n = cellNode(r, ci);
+
+      // opening keeps the node id, so the cell is the same node after it
+      if (n != noNode && tree.holdsDocument(n)) {
+        expandEmbedded(doc, n);
+      }
+
+      if (r < sampleRows && n != noNode) {
+        cells ~= n;
+      }
+    }
+
+    string[] steps = keysOf(cells);
+
+    if (!steps.length) {
+      size_t longest = 0;
+
+      foreach (c; cells) {
+        if (doc.nodes[c].type == NodeType.array) {
+          longest = max(longest, doc.nodes[c].len);
+        }
+      }
+
+      foreach (k; 0 .. min(longest, 20)) {
+        steps ~= "[" ~ k.to!string ~ "]";
+      }
+    }
+
+    if (!steps.length) {
+      return;
+    }
+
+    auto origin = cast(int)originals.length;
+    Column[] fresh;
+
+    originals ~= columns[ci];
+    foreach (step; steps) {
+      auto title = columns[ci].title ~ (step[0] == '[' ? step : "." ~ step);
+
+      fresh ~= Column(title, path ~ step, 0, false, origin);
+    }
+
+    columns = columns[0 .. ci] ~ fresh ~ columns[ci + 1 .. $];
+    markExpandable();
+    foreach (k; ci .. ci + fresh.length) {
+      fitWidth(k);
+    }
+
+    ui.invalidate();
+  }
+
+  void collapseColumn(size_t ci) {
+    if (columns[ci].origin < 0) {
+      return;
+    }
+
+    auto restored = originals[columns[ci].origin];
+    auto group = restored.path;
+    size_t first = ci, last = ci;
+
+    bool inside(size_t k) {
+      return columns[k].path.length > group.length && columns[k].path.startsWith(group);
+    }
+
+    while (first > 0 && inside(first - 1)) {
+      first--;
+    }
+
+    while (last + 1 < columns.length && inside(last + 1)) {
+      last++;
+    }
+
+    columns = columns[0 .. first] ~ restored ~ columns[last + 1 .. $];
+    markExpandable();
+    ui.invalidate();
+  }
+
+  bool prepareVisible() {
+    if (doc is null || !byKeys) {
+      return false;
+    }
+
+    bool changed = false;
+
+    foreach (ref col; columns) {
+      if (col.path.length < 2) {
+        continue;
+      }
+
+      foreach (k; 0 .. visibleRows + 1) {
+        auto r = top + k;
+
+        if (r >= rows.length) {
+          break;
+        }
+
+        auto cur = rows[r];
+
+        foreach (step; col.path[0 .. $ - 1]) {
+          cur = child(cur, step);
+          if (cur == noNode) {
+            break;
+          }
+
+          if (tree.holdsDocument(cur) && !expandEmbedded(doc, cur).length) {
+            changed = true;
+          }
+        }
+      }
+    }
+
+    return changed;
   }
 
   override void layout(Rect r) {
@@ -187,11 +430,22 @@ final class TableView : Widget {
     c.fill(header, mix(t.window, t.view, 0.5));
     c.hline(header.x, header.right, header.bottom - 1, t.border);
     c.pushClip(Rect(rect.x, rect.y, body.w, rect.h));
+
     int x = rect.x - scrollX;
 
-    foreach (ref col; columns) {
-      c.textFit(f, x + ui.px(8), header.y + (header.h - f.lineHeight) / 2, col.title, t.dimText,
-        col.width - ui.px(12));
+    foreach (ci, ref col; columns) {
+      int buttons = (col.expandable ? 1 : 0) + (col.origin >= 0 ? 1 : 0);
+      int textW = col.width - ui.px(12 + buttons * 20);
+
+      c.textFit(f, x + ui.px(8), header.y + (header.h - f.lineHeight) / 2, col.title, t.dimText, textW);
+      if (col.expandable) {
+        drawHeaderButton(c, buttonRect(x, col.width, 0), true);
+      }
+
+      if (col.origin >= 0) {
+        drawHeaderButton(c, buttonRect(x, col.width, col.expandable ? 1 : 0), false);
+      }
+
       c.vline(x + col.width - 1, header.y + ui.px(4), header.bottom - ui.px(4), t.border);
       x += col.width;
     }
@@ -199,6 +453,7 @@ final class TableView : Widget {
     c.popClip();
 
     c.pushClip(body);
+
     auto lineColor = mix(t.view, t.border, 0.45);
 
     foreach (k; 0 .. visibleRows + 1) {
@@ -210,10 +465,11 @@ final class TableView : Widget {
 
       int y = body.y + k * rowH;
       bool selected = r == cursor;
+      Color bg = (r & 1) ? t.alternate : t.view;
 
-      Color bg = selected
-        ? (focused ? t.selection : mix(t.view, t.selection, 0.35))
-        : (r & 1) ? t.alternate : t.view;
+      if (selected) {
+        bg = focused ? t.selection : mix(t.view, t.selection, 0.35);
+      }
 
       c.fill(Rect(body.x, y, body.w, rowH), bg);
       x = body.x - scrollX;
@@ -242,17 +498,37 @@ final class TableView : Widget {
     }
   }
 
+  private Rect buttonRect(int x, int width, int place) {
+    int s = ui.px(16);
+
+    return Rect(x + width - (s + ui.px(4)) * (place + 1) - ui.px(2), rect.y + (headerH - s) / 2, s, s);
+  }
+
+  private void drawHeaderButton(Canvas c, Rect r, bool plus) {
+    auto t = ui.theme;
+    float cx = r.x + r.w / 2.0f, cy = r.y + r.h / 2.0f, d = ui.px(3.5);
+
+    c.roundRect(r, ui.px(3), t.button, t.border);
+    c.line(cx - d, cy, cx + d, cy, ui.px(1.3), t.text);
+    if (plus) {
+      c.line(cx, cy - d, cx, cy + d, ui.px(1.3), t.text);
+    }
+  }
+
   private void drawCell(Canvas c, size_t r, size_t ci, Rect cell, bool inverted) {
     auto t = ui.theme;
     auto f = ui.fonts.ui;
-    auto n = ci == 0 || (!byKeys && ci == 2) ? noNode : cellNode(r, ci);
+    bool label = ci == 0 || (!byKeys && ci == 2);
+    auto n = label ? noNode : cellNode(r, ci);
     auto text = cellText(r, ci);
     Color color = t.text;
 
-    if (ci == 0 || (!byKeys && ci == 2)) {
+    if (label) {
       color = t.dimText;
     } else if (n != noNode) {
-      color = valueColor(doc.nodes[n].type);
+      bool summary = doc.nodes[n].isContainer || tree.holdsDocument(n);
+
+      color = summary ? t.dimText : valueColor(doc.nodes[n].type);
     }
 
     if (inverted) {
@@ -358,6 +634,16 @@ final class TableView : Widget {
     return 0;
   }
 
+  private int columnStart(size_t ci) {
+    int at = rect.x - scrollX;
+
+    foreach (k; 0 .. ci) {
+      at += columns[k].width;
+    }
+
+    return at;
+  }
+
   override Cursor cursorAt(int x, int y) {
     if (resizing >= 0 || (y < rect.y + headerH && columnEdgeAt(x) >= 0)) {
       return Cursor.resizeH;
@@ -370,11 +656,7 @@ final class TableView : Widget {
     ui.setFocus(this);
     ui.capture = this;
     if (e.y < rect.y + headerH) {
-      resizing = columnEdgeAt(e.x);
-      if (resizing >= 0) {
-        resizeStart = e.x;
-        resizeWidth = columns[resizing].width;
-      }
+      headerClick(e);
 
       return true;
     }
@@ -407,6 +689,26 @@ final class TableView : Widget {
     }
 
     return true;
+  }
+
+  private void headerClick(ref const Event e) {
+    auto ci = columnAt(e.x);
+    auto col = columns[ci];
+    auto x = columnStart(ci);
+
+    if (col.expandable && buttonRect(x, col.width, 0).contains(e.x, e.y)) {
+      return expandColumn(ci);
+    }
+
+    if (col.origin >= 0 && buttonRect(x, col.width, col.expandable ? 1 : 0).contains(e.x, e.y)) {
+      return collapseColumn(ci);
+    }
+
+    resizing = columnEdgeAt(e.x);
+    if (resizing >= 0) {
+      resizeStart = e.x;
+      resizeWidth = columns[resizing].width;
+    }
   }
 
   override void mouseMove(ref const Event e) {

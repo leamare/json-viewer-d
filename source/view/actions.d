@@ -1,5 +1,6 @@
 module view.actions;
 
+import std.algorithm : min;
 import std.path : setExtension;
 import std.string : toLower;
 
@@ -179,6 +180,90 @@ string nodeLabel(const Document doc, uint i, size_t maxLen = 256, size_t index =
   }
 
   return "[" ~ (index == size_t.max ? doc.indexInParent(i) : index).to!string ~ "]";
+}
+
+string containerSummary(const Document doc, uint i, size_t maxLen = 200) {
+  import std.conv : to;
+  import std.algorithm : canFind;
+  import std.array : join;
+
+  auto n = &doc.nodes[i];
+
+  if (n.type == NodeType.object) {
+    WriteOptions opt;
+
+    opt.compact = true;
+    opt.readable = true;
+    opt.embeddedRoot = true;
+
+    bool cut;
+    auto text = nodeToText(doc, i, Format.json, opt, maxLen, &cut);
+
+    if (text.length && text[$ - 1] == '\n') {
+      text = text[0 .. $ - 1];
+    }
+
+    return cut ? text[0 .. min(text.length, maxLen)] ~ "\u2026" : text;
+  }
+
+  if (!n.len) {
+    return "[]";
+  }
+
+  string[] kinds;
+  string shape;
+  bool similar = true;
+  size_t seen = 0;
+
+  foreach (c; doc.children(i)) {
+    if (seen++ >= 50) {
+      break;
+    }
+
+    auto kind = typeName(doc.nodes[c].type);
+    string here = kind;
+
+    if (doc.nodes[c].type == NodeType.object) {
+      string[] keys;
+
+      foreach (k; doc.children(c)) {
+        keys ~= doc.key(k, 40);
+      }
+
+      here = "{" ~ keys.join(", ") ~ "}";
+    }
+
+    if (!shape.length) {
+      shape = here;
+    } else if (here != shape) {
+      similar = false;
+    }
+
+    if (!kinds.canFind(kind)) {
+      kinds ~= kind;
+    }
+  }
+
+  string res;
+
+  if (similar) {
+    res = n.len.to!string ~ " \u00D7 " ~ shape;
+  } else {
+    res = n.len.to!string ~ " items: " ~ kinds[0 .. min(kinds.length, 3)].join(", ") ~ (kinds.length > 3 ? ", \u2026" : "");
+  }
+
+  return res.length > maxLen ? res[0 .. maxLen] ~ "\u2026" : res;
+}
+
+private string typeName(NodeType t) {
+  final switch (t) {
+    case NodeType.null_: return "null";
+    case NodeType.boolean: return "boolean";
+    case NodeType.number: return "number";
+    case NodeType.string: return "string";
+    case NodeType.object: return "object";
+    case NodeType.array: return "array";
+  }
 }
 
 string valuePreview(const Document doc, uint i, size_t maxLen = 256) {
