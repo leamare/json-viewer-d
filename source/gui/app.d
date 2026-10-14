@@ -152,7 +152,7 @@ final class GuiApp {
   private Rect sourceBar;
   private Rect[] sourceFormatRects;
   private float mainSplit = 0.42;
-  private int messagesLines = 6;
+  private int messagesLines = 7;
   private bool showMessages = true;
   private int dragging;
 
@@ -756,6 +756,13 @@ final class GuiApp {
     return res;
   }
 
+  private void messageColumns(size_t count, out int colW, out int perColumn) {
+    perColumn = max(1, (messagesRect.h - ui.px(8)) / ui.fonts.ui.lineHeight);
+    int columns = max(2, cast(int)((count + perColumn - 1) / perColumn));
+
+    colW = max(ui.px(320), (messagesRect.w - ui.px(10)) / columns);
+  }
+
   private void drawMessages(Canvas c) {
     auto t = ui.theme;
     auto f = ui.fonts.ui;
@@ -771,8 +778,9 @@ final class GuiApp {
 
     c.fill(messagesRect, t.view);
     auto list = messages();
-    int colW = max(ui.px(320), messagesRect.w / 2);
-    int perColumn = max(1, (messagesRect.h - ui.px(8)) / f.lineHeight);
+    int colW, perColumn;
+
+    messageColumns(list.length, colW, perColumn);
     int labelW = ui.px(110);
 
     foreach (k, m; list) {
@@ -1101,8 +1109,9 @@ final class GuiApp {
   private void messageClick(ref Event e) {
     auto f = ui.fonts.ui;
     auto list = messages();
-    int colW = max(ui.px(320), messagesRect.w / 2);
-    int perColumn = max(1, (messagesRect.h - ui.px(8)) / f.lineHeight);
+    int colW, perColumn;
+
+    messageColumns(list.length, colW, perColumn);
     int col = (e.x - messagesRect.x - ui.px(10)) / colW;
     int rowIdx = (e.y - messagesRect.y - ui.px(6)) / f.lineHeight;
 
