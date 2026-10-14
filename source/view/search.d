@@ -191,7 +191,7 @@ private bool termMatches(const Document doc, uint i, ref const Term t) {
   const n = &doc.nodes[i];
 
   if (t.hasKey) {
-    if (!n.has(NodeFlags.hasKey) || doc.key(i).toLower != t.key) {
+    if (!n.has(NodeFlags.hasKey) || !keyIs(doc, i, t.key)) {
       return false;
     }
 
@@ -199,18 +199,66 @@ private bool termMatches(const Document doc, uint i, ref const Term t) {
       return true;
     }
 
-    return !n.isContainer && t.value.match(doc.value(i));
+    return !n.isContainer && valueMatches(doc, i, t.value);
   }
 
   if (!t.value.needle.length) {
     return true;
   }
 
-  if (n.has(NodeFlags.hasKey) && t.value.match(doc.key(i))) {
-    return true;
+  if (n.has(NodeFlags.hasKey)) {
+    auto key = n.has(NodeFlags.keyEsc) || !t.value.ascii ? doc.key(i) : doc.keyRaw(i);
+
+    if (t.value.match(key)) {
+      return true;
+    }
   }
 
-  return !n.isContainer && t.value.match(doc.value(i));
+  return !n.isContainer && valueMatches(doc, i, t.value);
+}
+
+private bool valueMatches(const Document doc, uint i, ref const Matcher m) {
+  if (doc.nodes[i].has(NodeFlags.escaped) || !m.ascii) {
+    return m.match(doc.value(i));
+  }
+
+  return m.match(doc.valueRaw(i));
+}
+
+private bool keyIs(const Document doc, uint i, string lowerKey) {
+  const n = &doc.nodes[i];
+
+  if (n.has(NodeFlags.keyEsc) || n.keySyntax == Syntax.multiline) {
+    return doc.key(i).toLower == lowerKey;
+  }
+
+  auto raw = doc.keyRaw(i);
+
+  if (raw.length >= 2 && raw[0] == '"') {
+    raw = raw[1 .. $ - 1];
+  }
+
+  foreach (char c; raw) {
+    if (c >= 0x80) {
+      return doc.key(i).toLower == lowerKey;
+    }
+  }
+
+  if (raw.length != lowerKey.length) {
+    return false;
+  }
+
+  foreach (k, char c; raw) {
+    if (c >= 'A' && c <= 'Z') {
+      c += 32;
+    }
+
+    if (c != lowerKey[k]) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 private string[] splitWords(string text) {

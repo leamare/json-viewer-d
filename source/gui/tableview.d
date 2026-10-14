@@ -190,7 +190,8 @@ final class TableView : Widget {
     int x = rect.x - scrollX;
 
     foreach (ref col; columns) {
-      c.textFit(f, x + ui.px(8), header.y + (header.h - f.lineHeight) / 2, col.title, t.dimText, col.width - ui.px(12));
+      c.textFit(f, x + ui.px(8), header.y + (header.h - f.lineHeight) / 2, col.title, t.dimText,
+        col.width - ui.px(12));
       c.vline(x + col.width - 1, header.y + ui.px(4), header.bottom - ui.px(4), t.border);
       x += col.width;
     }
@@ -209,7 +210,10 @@ final class TableView : Widget {
 
       int y = body.y + k * rowH;
       bool selected = r == cursor;
-      Color bg = selected ? (focused ? t.selection : mix(t.view, t.selection, 0.35)) : (r & 1) ? t.alternate : t.view;
+
+      Color bg = selected
+        ? (focused ? t.selection : mix(t.view, t.selection, 0.35))
+        : (r & 1) ? t.alternate : t.view;
 
       c.fill(Rect(body.x, y, body.w, rowH), bg);
       x = body.x - scrollX;

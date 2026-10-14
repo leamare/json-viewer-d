@@ -1,6 +1,7 @@
 module gui.treegrid;
 
 import std.algorithm : min, max;
+import std.conv : to;
 
 import doc.document;
 import gui.ui;
@@ -154,9 +155,16 @@ final class TreeGrid : Widget {
     int lx = ix + ui.px(18);
     int end = c.textFit(font, lx, ty, label, isIndex && !selected ? t.dimText : fg, sx - lx - ui.px(6));
 
+    auto filter = n.isContainer ? tree.filterOf(id) : null;
+
     if (n.has(NodeFlags.embedded)) {
       import std.uni : toLower;
-      pill(c, end + ui.px(6), row, embeddedFormatName(*n).toLower, selected ? fg : t.accent);
+
+      end = pill(c, end + ui.px(6), row, embeddedFormatName(*n).toLower, selected ? fg : t.accent);
+    }
+
+    if (filter !is null) {
+      pill(c, end + ui.px(6), row, "filter: " ~ filter.filter.text, selected ? fg : t.accent);
     }
 
     c.popClip();
@@ -172,7 +180,8 @@ final class TreeGrid : Widget {
       return;
     }
 
-    auto text = valuePreview(doc, id, 600);
+    auto text = filter is null ? valuePreview(doc, id, 600) :
+      "[" ~ filter.ids.length.to!string ~ " of " ~ n.len.to!string ~ "]";
     Color vc = selected && (focused || editing) ? fg : valueColor(n.type);
 
     if (n.isContainer) {
@@ -192,7 +201,7 @@ final class TreeGrid : Widget {
     }
   }
 
-  private void pill(Canvas c, int x, Rect row, string label, Color color) {
+  private int pill(Canvas c, int x, Rect row, string label, Color color) {
     auto f = ui.fonts.small;
     int w = f.measure(label) + ui.px(10);
     int h = f.lineHeight + ui.px(1);
@@ -200,6 +209,8 @@ final class TreeGrid : Widget {
 
     c.roundRect(r, h / 2.0f, mix(ui.theme.view, color, 0.18), mix(ui.theme.view, color, 0.6));
     c.text(f, x + ui.px(5), r.y + (h - f.lineHeight) / 2, label, color);
+
+    return r.right;
   }
 
   Color valueColor(NodeType type) {

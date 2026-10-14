@@ -1359,6 +1359,7 @@ final class GuiApp {
       case Key.y: if (!ctrl) return false; redo(); return true;
       case Key.j: if (!ctrl) return false; toggleEmbedded(); return true;
       case Key.e: if (!ctrl) return false; expandAll(); return true;
+      case Key.l: if (!ctrl) return false; filterDialog(); return true;
       default: return false;
     }
   }
@@ -1719,6 +1720,81 @@ final class GuiApp {
     }
   }
 
+  private uint filterTarget() {
+    auto d = doc();
+    auto n = grid.tree.selected;
+
+    if (d[n].isContainer) {
+      return n;
+    }
+
+    return d[n].parent;
+  }
+
+  private uint filteredNode() {
+    auto d = doc();
+
+    for (auto n = grid.tree.selected; n != noNode; n = d[n].parent) {
+      if (grid.tree.filterOf(n) !is null) {
+        return n;
+      }
+    }
+
+    return noNode;
+  }
+
+  private void filterDialog() {
+    auto d = doc();
+
+    if (d is null) {
+      return;
+    }
+
+    auto target = filterTarget();
+
+    if (target == noNode) {
+      return;
+    }
+
+    auto current = grid.tree.filterOf(target);
+
+    auto message = "Shows only children of " ~ nodeLabel(d, target, 40) ~
+      " that have the text somewhere inside.\n" ~
+      "Words must all be there, key=value looks under that key only, -word excludes,\n" ~
+      "\"two words\" stay together.";
+
+    ask("Filter children", message, ["Filter", "Cancel"], (b, vals) {
+      if (b != 0) {
+        return;
+      }
+
+      auto count = grid.tree.setFilter(target, vals[0].strip);
+
+      grid.tree.reveal(target);
+      grid.ensureVisible();
+      detailsNode = noNode;
+      loadDetails();
+      setStatus(vals[0].strip.length
+        ? "Showing " ~ groupDigits(count) ~ " of " ~ groupDigits(d[target].len)
+        : "Filter cleared");
+    }, ["Filter"], [current is null ? "" : current.filter.text]);
+  }
+
+  private void clearFilter() {
+    auto n = filteredNode();
+
+    if (n == noNode) {
+      return;
+    }
+
+    grid.tree.clearFilter(n);
+    grid.tree.reveal(n);
+    grid.ensureVisible();
+    detailsNode = noNode;
+    loadDetails();
+    setStatus("Filter cleared");
+  }
+
   private void findNextMatch(bool backwards) {
     auto d = doc();
 
@@ -2058,12 +2134,19 @@ final class GuiApp {
 
     if (full) {
       items ~= separator();
+      items ~= item("Filter children\u2026", "Ctrl+L", () { filterDialog(); }, has);
+      items ~= item("Clear filter", "", () { clearFilter(); }, has && filteredNode() != noNode);
       items ~= item("Find", "Ctrl+F", () { ui.setFocus(search); });
       items ~= item("Find next", "F3", () { findNextMatch(false); }, has);
       items ~= item("Find previous", "Shift+F3", () { findNextMatch(true); }, has);
     } else {
       items ~= separator();
       items ~= item("Expand all below", "Ctrl+E", () { expandAll(); }, has && d[sel].isContainer);
+      items ~= item("Filter children\u2026", "Ctrl+L", () { filterDialog(); }, has);
+      if (filteredNode() != noNode) {
+        items ~= item("Clear filter", "", () { clearFilter(); });
+      }
+
       items ~= item("Show in source", "", () { setSourceMode(true); }, has && d.sourcePos(sel) != ulong.max);
     }
 

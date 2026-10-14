@@ -16,6 +16,7 @@ string embeddedText(const Document doc, uint i) {
 
   opt.embeddedRoot = true;
   string original;
+
   if (n.has(NodeFlags.original)) {
     original = decodeString(doc.embeddedSource(i), n.valueSyntax);
     if (n.has(NodeFlags.slashed)) {

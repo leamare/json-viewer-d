@@ -337,7 +337,7 @@ bool rawLooksLikeJson(const(char)[] raw, Syntax syntax) {
   while (true) {
     if (a < b && isSpace(raw[a])) {
       a++;
-    } else if (a + 1 < b && raw[a] == '\\' && (raw[a + 1] == 'n' || raw[a + 1] == 't' || raw[a + 1] == 'r')) {
+    } else if (a + 1 < b && raw[a] == '\\' && isEscapedSpace(raw[a + 1])) {
       a += 2;
     } else {
       break;
@@ -347,7 +347,7 @@ bool rawLooksLikeJson(const(char)[] raw, Syntax syntax) {
   while (true) {
     if (b > a && isSpace(raw[b - 1])) {
       b--;
-    } else if (b >= a + 2 && raw[b - 2] == '\\' && (raw[b - 1] == 'n' || raw[b - 1] == 't' || raw[b - 1] == 'r')) {
+    } else if (b >= a + 2 && raw[b - 2] == '\\' && isEscapedSpace(raw[b - 1])) {
       b -= 2;
     } else {
       break;
@@ -359,6 +359,10 @@ bool rawLooksLikeJson(const(char)[] raw, Syntax syntax) {
   }
 
   return (raw[a] == '{' && raw[b - 1] == '}') || (raw[a] == '[' && raw[b - 1] == ']');
+}
+
+private bool isEscapedSpace(char c) {
+  return c == 'n' || c == 't' || c == 'r';
 }
 
 bool isBareKey(const(char)[] s) {

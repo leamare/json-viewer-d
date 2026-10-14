@@ -248,7 +248,9 @@ string expandEmbedded(Document doc, uint i, Format format = Format.unknown) {
 
   // JSON that went through addslashes: {\"a\":1}
   if (err.length && text.canFind(`\"`)) {
-    if (!replaceWithText(doc, i, stripSlashes(text), format, NodeFlags.embedded | NodeFlags.slashed, true).length) {
+    ubyte flags = NodeFlags.embedded | NodeFlags.slashed;
+
+    if (!replaceWithText(doc, i, stripSlashes(text), format, flags, true).length) {
       return null;
     }
   }

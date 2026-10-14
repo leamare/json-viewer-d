@@ -219,6 +219,8 @@ private final class TuiApp {
       case 'd': askDelete(); break;
       case 'J': toggleEmbedded(); break;
       case 'B': askEmbeddedFormat(); break;
+      case 'f': askFilter(); break;
+      case 'F': clearFilter(); break;
       case 'c': askCopy(); break;
       case 'y': copy(CopyKind.value); break;
       case '/': startSearch(); break;
@@ -636,6 +638,40 @@ private final class TuiApp {
     });
   }
 
+  void askFilter() {
+    auto n = tree.selected;
+    auto target = doc[n].isContainer ? n : doc[n].parent;
+
+    if (target == noNode) {
+      return;
+    }
+
+    auto current = tree.filterOf(target);
+
+    ask("Filter children (words, key=value, -word): ", current is null ? "" : current.filter.text, (text) {
+      auto count = tree.setFilter(target, text.strip);
+
+      tree.reveal(target);
+      detailsNode = noNode;
+      if (text.strip.length) {
+        info("Showing " ~ groupDigits(count) ~ " of " ~ groupDigits(doc[target].len));
+      }
+    });
+  }
+
+  void clearFilter() {
+    for (auto n = tree.selected; n != noNode; n = doc[n].parent) {
+      if (tree.filterOf(n) !is null) {
+        tree.clearFilter(n);
+        tree.reveal(n);
+        detailsNode = noNode;
+        info("Filter cleared");
+
+        return;
+      }
+    }
+  }
+
   void afterEdit(uint focus, string err) {
     if (err.length) {
       return error(err);
@@ -963,7 +999,10 @@ private final class TuiApp {
       }
 
       screen.put(treeX + keyW, y, "│", dimStyle);
-      auto preview = valuePreview(doc, n, cast(size_t)treeW * 4);
+      auto filter = node.isContainer ? tree.filterOf(n) : null;
+
+      auto preview = filter is null ? valuePreview(doc, n, cast(size_t)treeW * 4) :
+        "[" ~ filter.ids.length.to!string ~ " of " ~ node.len.to!string ~ "] filter: " ~ filter.filter.text;
       auto vs = valueStyle(node.type);
       int vx = screen.put(treeX + keyW + 2, y, preview, vs, treeX + treeW);
 
@@ -1139,6 +1178,7 @@ private final class TuiApp {
       "",
       "Search and copy",
       "  / Ctrl+F       find            n N F3       next / previous match",
+      "  f              filter children (words, key=value, -word)    F  clear filter",
       "  c              copy menu       y            copy value",
       "",
       "Files",
