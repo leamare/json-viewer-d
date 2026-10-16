@@ -33,6 +33,8 @@ Everything is drawn by the app itself, so it's a single executable without depen
 
 ## Build
 
+Prebuilt binaries for Linux (x86_64, aarch64, also as AppImage), Windows and macOS (terminal UI only) are on the [releases page](https://github.com/leamare/json-viewer-d/releases).
+
 Build:
 `dub build -b release`
 
