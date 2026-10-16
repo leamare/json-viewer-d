@@ -273,6 +273,13 @@ final class GuiApp {
       popup.open(x, y, items);
       overlay = popup;
     };
+    table.onPrompt = (title, message, initial, done) {
+      ask(title, message, ["Filter", "Cancel"], (b, vals) {
+        if (b == 0) {
+          done(vals[0]);
+        }
+      }, ["Value"], [initial]);
+    };
 
     search = new LineEdit(ui);
     search.placeholder = "Find in keys and values (Ctrl+F)";
@@ -858,8 +865,11 @@ final class GuiApp {
 
     if (showingTable) {
       table.draw(c);
-      info = format("%s rows, %s columns   Double click shows the element in the tree",
-        groupDigits(table.rowCount), table.columnCount);
+      auto shown = table.rowCount == table.allRows ? groupDigits(table.rowCount) :
+        groupDigits(table.rowCount) ~ " of " ~ groupDigits(table.allRows);
+
+      info = format("%s rows, %s columns   Click a header to sort, right click for filters and columns",
+        shown, table.columnCount);
     } else {
       details.draw(c);
       auto caret = details.caret;
@@ -930,7 +940,9 @@ final class GuiApp {
 
       res ~= Message("A", tb.diff.nameA, 0);
       res ~= Message("B", tb.diff.nameB, 0);
-      res ~= Message("Result", df.identical ? "documents are the same" : "documents differ", df.identical ? 3 : 4);
+      auto result = df.identical ? "documents are the same" : "documents differ";
+
+      res ~= Message("Result", result, df.identical ? 3 : 4);
       res ~= Message("Only in A", groupDigits(df.removed), 2);
       res ~= Message("Only in B", groupDigits(df.added), 2);
       res ~= Message("Changed", groupDigits(df.changed), 2);

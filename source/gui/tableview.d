@@ -15,6 +15,7 @@ private enum ColKind {
   path,
   value,
   type,
+  label,
 }
 
 /// Column of the table. Expanded columns are groups: their children go on the
@@ -31,6 +32,7 @@ private final class Col {
   bool hidden;
   bool expandable;
   int width;
+  string filter;
 
   int x;
   int w;
@@ -80,12 +82,18 @@ private final class Col {
 final class TableView : Widget {
   void delegate(uint) onOpen;
   void delegate(int, int, MenuItem[]) onHeaderMenu;
+  void delegate(string, string, string, void delegate(string)) onPrompt;
 
   private Document doc;
   private TreeModel tree;
   private uint node = noNode;
+  private uint[] baseRows;
+  private const(uint)[] baseIndices;
   private uint[] rows;
-  private const(uint)[] indices;
+  private uint[] indices;
+  private Col labelCol;
+  private Col sortCol;
+  private int sortDir;
   private Col[] roots;
   private Col[] leaves;
   private int levels = 1;
@@ -113,6 +121,9 @@ final class TableView : Widget {
     Col[] roots;
     int firstWidth;
     bool byKeys;
+    Col sortCol;
+    int sortDir;
+    string labelFilter;
   }
 
   private enum maxColumns = 100;
@@ -122,11 +133,13 @@ final class TableView : Widget {
 
   this(Ui ui) {
     super(ui);
+    labelCol = new Col(null, null, null, ColKind.label);
   }
 
   override bool focusable() { return true; }
 
   @property size_t rowCount() const { return rows.length; }
+  @property size_t allRows() const { return baseRows.length; }
   @property size_t columnCount() const { return leaves.length + 1; }
 
   @property int rowH() { return ui.rowHeight; }
@@ -140,8 +153,10 @@ final class TableView : Widget {
     doc = d;
     tree = t;
     node = n;
-    rows = children.dup;
-    indices = childIndices;
+    baseRows = children.dup;
+    baseIndices = childIndices;
+    rows = baseRows.dup;
+    indices = null;
     summaries = null;
     heightsDirty = true;
     if (listening !is d) {
@@ -162,15 +177,23 @@ final class TableView : Widget {
         roots = saved.roots;
         firstWidth = saved.firstWidth;
         byKeys = saved.byKeys;
+        sortCol = saved.sortCol;
+        sortDir = saved.sortDir;
+        labelCol.filter = saved.labelFilter;
         markExpandable();
         placeColumns();
       } else {
+        sortCol = null;
+        sortDir = 0;
+        labelCol.filter = null;
         buildColumns();
-        layouts[key] = Layout(roots, firstWidth, byKeys);
+        saveLayout();
       }
     } else {
       markExpandable();
     }
+
+    applyView();
 
     cursor = min(cursor, rows.length ? rows.length - 1 : 0);
     ui.invalidate();
@@ -181,9 +204,11 @@ final class TableView : Widget {
       return;
     }
 
-    foreach (ref r; rows) {
-      if (r >= oldEnd) {
-        r = cast(uint)(r + delta);
+    foreach (list; [baseRows, rows]) {
+      foreach (ref r; list) {
+        if (r >= oldEnd) {
+          r = cast(uint)(r + delta);
+        }
       }
     }
 
@@ -319,6 +344,14 @@ final class TableView : Widget {
       c.w = x - c.x;
       if (c.w) {
         levels = max(levels, depth + 2);
+
+        int need = ui.fonts.ui.measure(c.title) + ui.px(40);
+
+        if (c.w < need) {
+          leaves[$ - 1].w += need - c.w;
+          x += need - c.w;
+          c.w = need;
+        }
       }
 
       return;
@@ -376,21 +409,29 @@ final class TableView : Widget {
   }
 
   private uint groupArray(size_t r, Col g, bool open = false) {
-    auto n = resolve(rows[r], g.steps, open);
+    return groupArrayAt(rows[r], g, open);
+  }
+
+  private uint groupArrayAt(uint row, Col g, bool open = false) {
+    auto n = resolve(row, g.steps, open);
 
     return n != noNode && doc.nodes[n].type == NodeType.array ? n : noNode;
   }
 
   private uint[] cellsOf(size_t r, Col c, bool open = false) {
+    return cellsAt(rows[r], c, open);
+  }
+
+  private uint[] cellsAt(uint row, Col c, bool open = false) {
     auto g = c.rowsGroup;
 
     if (g is null) {
-      auto n = resolve(rows[r], c.steps, open);
+      auto n = resolve(row, c.steps, open);
 
       return n == noNode ? null : [n];
     }
 
-    auto arr = groupArray(r, g, open);
+    auto arr = groupArrayAt(row, g, open);
 
     if (arr == noNode) {
       return null;
@@ -426,6 +467,216 @@ final class TableView : Widget {
 
   private string rowLabel(size_t r) {
     return nodeLabel(doc, rows[r], 200, indices.length > r ? indices[r] : size_t.max);
+  }
+
+  private void saveLayout() {
+    layouts[layoutKey] = Layout(roots, firstWidth, byKeys, sortCol, sortDir, labelCol.filter);
+  }
+
+  private void applyView() {
+    Col[] filtered;
+
+    if (labelCol.filter.length) {
+      filtered ~= labelCol;
+    }
+
+    eachColumn((c) {
+      if (c.filter.length && !c.isGroup) {
+        filtered ~= c;
+      }
+    });
+
+    ValueFilter[] tests;
+
+    foreach (c; filtered) {
+      tests ~= parseValueFilter(c.filter);
+    }
+
+    rows.length = 0;
+    indices.length = 0;
+    foreach (k, row; baseRows) {
+      uint index = k < baseIndices.length ? baseIndices[k] : cast(uint)k;
+      bool ok = true;
+
+      foreach (f, c; filtered) {
+        if (!passes(row, index, c, tests[f])) {
+          ok = false;
+          break;
+        }
+      }
+
+      if (ok) {
+        rows ~= row;
+        indices ~= index;
+      }
+    }
+
+    if (sortCol !is null && sortDir) {
+      sortRows();
+    }
+
+    cursor = min(cursor, rows.length ? rows.length - 1 : 0);
+    heightsDirty = true;
+    saveLayout();
+    ui.invalidate();
+  }
+
+  private string[] textsOf(uint row, uint index, Col c) {
+    final switch (c.kind) {
+      case ColKind.label:
+        return [nodeLabel(doc, row, 200, index)];
+      case ColKind.value:
+        return [cellValue(row)];
+      case ColKind.type:
+        return [describeNode(doc, row)];
+      case ColKind.path:
+        string[] res;
+
+        foreach (n; cellsAt(row, c)) {
+          res ~= n == noNode ? null : cellValue(n);
+        }
+
+        return res;
+    }
+  }
+
+  private string cellValue(uint n) {
+    return doc.nodes[n].isContainer || tree.holdsDocument(n) ? valueText(n, 200) : doc.value(n, 1000);
+  }
+
+  private bool passes(uint row, uint index, Col c, ref const ValueFilter f) {
+    auto texts = textsOf(row, index, c);
+
+    if (f.negate) {
+      foreach (t; texts) {
+        if (f.matches(t)) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    foreach (t; texts) {
+      if (f.matches(t)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private void sortRows() {
+    import std.algorithm : sort, SwapStrategy;
+    import std.uni : icmp;
+
+    // kind is 0 for numbers, 1 for text, 2 for empty cells
+    static struct SortKey {
+      int kind;
+      double number;
+      string text;
+    }
+
+    auto keys = new SortKey[rows.length];
+
+    foreach (k, row; rows) {
+      auto texts = textsOf(row, indices[k], sortCol);
+      auto text = texts.length ? texts[0] : null;
+
+      if (sortCol.kind == ColKind.label && doc.nodes[node].type == NodeType.array) {
+        keys[k] = SortKey(0, indices[k]);
+      } else if (!text.length) {
+        keys[k] = SortKey(2);
+      } else {
+        try {
+          keys[k] = SortKey(0, text.to!double);
+        } catch (Exception) {
+          keys[k] = SortKey(1, 0, text);
+        }
+      }
+    }
+
+    auto order = new size_t[rows.length];
+
+    foreach (k; 0 .. order.length) {
+      order[k] = k;
+    }
+
+    int dir = sortDir;
+
+    bool less(size_t a, size_t b) {
+      auto x = &keys[a], y = &keys[b];
+
+      // empty cells stay at the end whatever the direction
+      if (x.kind != y.kind) {
+        return x.kind == 2 || y.kind == 2 ? y.kind == 2 : (dir > 0) == (x.kind < y.kind);
+      }
+
+      if (x.kind == 2) {
+        return false;
+      }
+
+      int cmp = x.kind == 0 ? (x.number < y.number ? -1 : x.number > y.number) : icmp(x.text, y.text);
+
+      return dir > 0 ? cmp < 0 : cmp > 0;
+    }
+
+    sort!(less, SwapStrategy.stable)(order);
+
+    auto sortedRows = new uint[rows.length];
+    auto sortedIndices = new uint[rows.length];
+
+    foreach (k, from; order) {
+      sortedRows[k] = rows[from];
+      sortedIndices[k] = indices[from];
+    }
+
+    rows = sortedRows;
+    indices = sortedIndices;
+  }
+
+  private void cycleSort(Col c) {
+    if (sortCol !is c) {
+      sortCol = c;
+      sortDir = 1;
+    } else if (sortDir == 1) {
+      sortDir = -1;
+    } else {
+      sortCol = null;
+      sortDir = 0;
+    }
+
+    applyView();
+  }
+
+  private void setSort(Col c, int dir) {
+    sortCol = dir ? c : null;
+    sortDir = dir;
+    applyView();
+  }
+
+  private void askFilter(Col c) {
+    if (onPrompt is null) {
+      return;
+    }
+
+    auto name = c is labelCol ? indexTitle : c.title;
+
+    onPrompt("Filter " ~ name, "Text to look for. =text matches the whole value, !text excludes, " ~
+      ">10 and <10 compare numbers.", c.filter, (text) {
+        c.filter = text;
+        applyView();
+      });
+  }
+
+  private bool anyFilter() {
+    bool any = labelCol.filter.length > 0;
+
+    eachColumn((c) {
+      any = any || c.filter.length > 0;
+    });
+
+    return any;
   }
 
   private string valueText(uint n, size_t maxLen) {
@@ -599,6 +850,33 @@ final class TableView : Widget {
   private MenuItem[] columnsMenu(Col clicked) {
     MenuItem[] items;
 
+    if (clicked !is null && !clicked.isGroup) {
+      items ~= item("Sort ascending", null, () { setSort(clicked, 1); });
+      items ~= item("Sort descending", null, () { setSort(clicked, -1); });
+      if (sortCol !is null) {
+        items ~= item("Original order", null, () { setSort(null, 0); });
+      }
+
+      items ~= item("Filter by value\u2026", null, () { askFilter(clicked); });
+      if (clicked.filter.length) {
+        items ~= item("Clear filter", null, () {
+          clicked.filter = null;
+          applyView();
+        });
+      }
+
+      items ~= separator();
+    }
+
+    if (anyFilter()) {
+      items ~= item("Clear all filters", null, () {
+        labelCol.filter = null;
+        eachColumn((c) { c.filter = null; });
+        applyView();
+      });
+      items ~= separator();
+    }
+
     if (clicked !is null && clicked.expanded) {
       items ~= item("Collapse " ~ clicked.title, null, () { collapseColumn(clicked); });
       items ~= separator();
@@ -694,13 +972,13 @@ final class TableView : Widget {
 
     c.fill(header, mix(t.window, t.view, 0.5));
     c.pushClip(Rect(rect.x, rect.y, body.w, headerH));
-    headerCell(c, Rect(rect.x - scrollX, rect.y, firstWidth, headerH), indexTitle, false, false);
+    headerCell(c, Rect(rect.x - scrollX, rect.y, firstWidth, headerH), indexTitle, false, false, labelCol);
     eachColumn((col) {
       if (col.w <= 0 || !visibleColumn(col)) {
         return;
       }
 
-      headerCell(c, headerRect(col), col.title, col.expandable, col.isGroup);
+      headerCell(c, headerRect(col), col.title, col.expandable, col.isGroup, col);
     });
     c.popClip();
     c.hline(header.x, header.right, header.bottom - 1, t.border);
@@ -733,14 +1011,21 @@ final class TableView : Widget {
     return right - left > ui.px(40) ? Rect(left, r.y, right - left, r.h) : r;
   }
 
-  private void headerCell(Canvas c, Rect r, string title, bool plus, bool minus) {
+  private void headerCell(Canvas c, Rect r, string title, bool plus, bool minus, Col col) {
     auto t = ui.theme;
     auto f = ui.fonts.ui;
     bool button = plus || minus;
+    bool sorted = sortCol is col && sortDir;
     auto shown = visiblePart(r);
     int ty = r.y + min(r.h, rowH) / 2 - f.lineHeight / 2 + (r.h > rowH ? (r.h - rowH) / 2 : 0);
+    int room = shown.w - ui.px(12 + (button ? 20 : 0) + (sorted ? 14 : 0));
+    auto color = col.filter.length ? t.accent : t.dimText;
+    int end = c.textFit(f, shown.x + ui.px(8), ty, title, color, room);
 
-    c.textFit(f, shown.x + ui.px(8), ty, title, t.dimText, shown.w - ui.px(button ? 32 : 12));
+    if (sorted) {
+      c.arrow(end + ui.px(8), ty + f.lineHeight / 2, ui.px(8), sortDir > 0 ? 3 : 1, t.text);
+    }
+
     if (button) {
       drawHeaderButton(c, buttonRect(shown), plus);
     }
@@ -819,6 +1104,8 @@ final class TableView : Widget {
     auto subLine = mix(t.view, t.border, 0.25);
 
     final switch (leaf.kind) {
+      case ColKind.label:
+        break;
       case ColKind.value:
         drawValue(c, rows[r], Rect(cell.x, cell.y, cell.w, rowH), inverted);
         break;
@@ -1047,6 +1334,10 @@ final class TableView : Widget {
 
     auto col = headerColumnAt(e.x, e.y);
 
+    if (col is null && e.x < rect.x - scrollX + firstWidth) {
+      col = labelCol;
+    }
+
     if (e.button == MouseButton.right) {
       if (onHeaderMenu) {
         onHeaderMenu(e.x, e.y, columnsMenu(col));
@@ -1055,7 +1346,7 @@ final class TableView : Widget {
       return;
     }
 
-    if (col !is null) {
+    if (col !is null && col !is labelCol) {
       auto cell = visiblePart(headerRect(col));
 
       if ((col.expandable || col.isGroup) && buttonRect(cell).contains(e.x, e.y)) {
@@ -1073,6 +1364,12 @@ final class TableView : Widget {
     if (resizing !is null) {
       resizeStart = e.x;
       resizeWidth = resizing.width;
+
+      return;
+    }
+
+    if (col !is null && !col.isGroup && e.button == MouseButton.left) {
+      cycleSort(col);
     }
   }
 
@@ -1144,3 +1441,87 @@ final class TableView : Widget {
 }
 
 private int abs(int v) { return v < 0 ? -v : v; }
+
+private struct ValueFilter {
+  enum Op {
+    contains,
+    exact,
+    less,
+    more,
+    lessOrEqual,
+    moreOrEqual,
+  }
+
+  Op op;
+  string text;
+  double number;
+  bool negate;
+
+  bool matches(string value) const {
+    import std.algorithm : canFind;
+    import std.uni : toLower;
+
+    if (op == Op.contains) {
+      return value.toLower.canFind(text);
+    }
+
+    if (op == Op.exact) {
+      return value.toLower == text;
+    }
+
+    double v;
+
+    try {
+      v = value.to!double;
+    } catch (Exception) {
+      return false;
+    }
+
+    final switch (op) {
+      case Op.contains:
+      case Op.exact:
+        return false;
+      case Op.less: return v < number;
+      case Op.more: return v > number;
+      case Op.lessOrEqual: return v <= number;
+      case Op.moreOrEqual: return v >= number;
+    }
+  }
+}
+
+/// "text", "=text", "!text", ">5", "<=5"
+private ValueFilter parseValueFilter(string s) {
+  import std.string : strip;
+  import std.uni : toLower;
+
+  ValueFilter f;
+
+  s = s.strip;
+  if (s.length > 1 && s[0] == '!') {
+    f.negate = true;
+    s = s[1 .. $].strip;
+  }
+
+  foreach (op; [">=", "<=", ">", "<"]) {
+    if (s.length > op.length && s[0 .. op.length] == op) {
+      try {
+        f.number = s[op.length .. $].strip.to!double;
+        f.op = op == ">=" ? ValueFilter.Op.moreOrEqual : op == "<=" ? ValueFilter.Op.lessOrEqual :
+          op == ">" ? ValueFilter.Op.more : ValueFilter.Op.less;
+
+        return f;
+      } catch (Exception) {
+        break;
+      }
+    }
+  }
+
+  if (s.length && s[0] == '=') {
+    f.op = ValueFilter.Op.exact;
+    s = s[1 .. $];
+  }
+
+  f.text = s.toLower;
+
+  return f;
+}

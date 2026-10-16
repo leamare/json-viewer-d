@@ -190,20 +190,7 @@ string containerSummary(const Document doc, uint i, size_t maxLen = 200) {
   auto n = &doc.nodes[i];
 
   if (n.type == NodeType.object) {
-    WriteOptions opt;
-
-    opt.compact = true;
-    opt.readable = true;
-    opt.embeddedRoot = true;
-
-    bool cut;
-    auto text = nodeToText(doc, i, Format.json, opt, maxLen, &cut);
-
-    if (text.length && text[$ - 1] == '\n') {
-      text = text[0 .. $ - 1];
-    }
-
-    return cut ? text[0 .. min(text.length, maxLen)] ~ "\u2026" : text;
+    return sourcePreview(doc, i, maxLen);
   }
 
   if (!n.len) {
@@ -213,6 +200,7 @@ string containerSummary(const Document doc, uint i, size_t maxLen = 200) {
   string[] kinds;
   string shape;
   bool similar = true;
+  bool plain = true;
   size_t seen = 0;
 
   foreach (c; doc.children(i)) {
@@ -222,6 +210,8 @@ string containerSummary(const Document doc, uint i, size_t maxLen = 200) {
 
     auto kind = typeName(doc.nodes[c].type);
     string here = kind;
+
+    plain = plain && doc.nodes[c].type != NodeType.object;
 
     if (doc.nodes[c].type == NodeType.object) {
       string[] keys;
@@ -244,15 +234,40 @@ string containerSummary(const Document doc, uint i, size_t maxLen = 200) {
     }
   }
 
+  // arrays without objects say more with their contents
+  if (plain) {
+    return sourcePreview(doc, i, maxLen);
+  }
+
   string res;
 
   if (similar) {
     res = n.len.to!string ~ " \u00D7 " ~ shape;
   } else {
-    res = n.len.to!string ~ " items: " ~ kinds[0 .. min(kinds.length, 3)].join(", ") ~ (kinds.length > 3 ? ", \u2026" : "");
+    auto names = kinds[0 .. min(kinds.length, 3)].join(", ");
+
+    res = n.len.to!string ~ " items: " ~ names ~ (kinds.length > 3 ? ", \u2026" : "");
   }
 
   return res.length > maxLen ? res[0 .. maxLen] ~ "\u2026" : res;
+}
+
+/// Compact JSON of the node, cut with an ellipsis
+private string sourcePreview(const Document doc, uint i, size_t maxLen) {
+  WriteOptions opt;
+  bool cut;
+
+  opt.compact = true;
+  opt.readable = true;
+  opt.embeddedRoot = true;
+
+  auto text = nodeToText(doc, i, Format.json, opt, maxLen, &cut);
+
+  if (text.length && text[$ - 1] == '\n') {
+    text = text[0 .. $ - 1];
+  }
+
+  return cut ? text[0 .. min(text.length, maxLen)] ~ "\u2026" : text;
 }
 
 private string typeName(NodeType t) {
