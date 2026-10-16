@@ -98,7 +98,9 @@ Window createWindow(string title, int width, int height) {
 
     return new Win32Window(title, width, height);
   } else version (OSX) {
-    throw new Exception("There is no GUI for macOS yet, use --tui");
+    import platform.cocoa : CocoaWindow;
+
+    return new CocoaWindow(title, width, height);
   } else {
     import platform.x11 : X11Window;
     import std.process : environment;

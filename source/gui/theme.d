@@ -118,6 +118,8 @@ private void finish(ref Theme t) {
 Theme systemTheme() {
   version (Windows) {
     return windowsAppsUseLight() ? breezeLight() : breezeDark();
+  } else version (OSX) {
+    return macDarkMode() ? breezeDark() : breezeLight();
   } else {
     auto kde = readKdeGlobals();
 
@@ -235,6 +237,16 @@ private Color* color(Ini ini, string section, string key) {
   }
 }
 
+version (OSX) private bool macDarkMode() {
+  import std.process : execute;
+
+  try {
+    return execute(["defaults", "read", "-g", "AppleInterfaceStyle"]).output.strip == "Dark";
+  } catch (Exception) {
+    return false;
+  }
+}
+
 version (Windows) private bool windowsAppsUseLight() {
   import core.sys.windows.windows;
 
@@ -272,6 +284,9 @@ Fonts loadFonts(float scale, bool dark) {
   version (Windows) {
     ui = FontChoice("Segoe UI", 9);
     mono = FontChoice("Consolas", 10);
+  } else version (OSX) {
+    ui = FontChoice("Helvetica", 10);
+    mono = FontChoice("Menlo", 10);
   } else {
     auto kde = readKdeGlobals();
 
@@ -412,6 +427,23 @@ private string[] candidates(string family, bool bold, bool mono) {
       }
     } catch (Exception) {
     }
+  } else version (OSX) {
+    // collections only give their first face, so bold comes from separate files
+    string[] names;
+
+    if (mono) {
+      names = ["Menlo.ttc", "Monaco.ttf", "Supplemental/Courier New.ttf"];
+    } else if (bold) {
+      names = ["Supplemental/Arial Bold.ttf", "Supplemental/Verdana Bold.ttf", "Supplemental/Tahoma Bold.ttf"];
+    } else {
+      names = ["Supplemental/Arial.ttf", "Helvetica.ttc", "Supplemental/Verdana.ttf", "Geneva.ttf"];
+    }
+
+    foreach (dir; ["/System/Library/Fonts", "/Library/Fonts"]) {
+      foreach (n; names) {
+        res ~= buildPath(dir, n);
+      }
+    }
   } else {
     auto style = bold ? "Bold" : "Regular";
 
@@ -445,6 +477,12 @@ private FontFace[] fallbackFaces() {
 
     foreach (n; ["seguisym.ttf", "msyh.ttc", "malgun.ttf", "meiryo.ttc"]) {
       if (auto f = loadFace(buildPath(dir, n))) {
+        res ~= f;
+      }
+    }
+  } else version (OSX) {
+    foreach (n; ["Supplemental/Arial Unicode.ttf", "Apple Symbols.ttf", "Menlo.ttc"]) {
+      if (auto f = loadFace(buildPath("/System/Library/Fonts", n))) {
         res ~= f;
       }
     }

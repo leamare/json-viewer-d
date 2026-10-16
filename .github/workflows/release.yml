@@ -74,9 +74,16 @@ jobs:
       - run: |
           strip bin/jsonview
           codesign --force --sign - bin/jsonview
-          mkdir out dmg
+          mkdir out
           tar -czf out/jsonview-macos-arm64.tar.gz -C bin jsonview
-          cp bin/jsonview dmg/
+
+          app="dmg/JSON Viewer.app/Contents"
+          mkdir -p "$app/MacOS" "$app/Resources"
+          cp bin/jsonview "$app/MacOS/"
+          cp dist/Info.plist "$app/"
+          cp dist/jsonview.icns "$app/Resources/"
+          codesign --force --deep --sign - "dmg/JSON Viewer.app"
+          ln -s /Applications dmg/Applications
           hdiutil create -volname "JSON Viewer" -srcfolder dmg -format UDZO out/jsonview-macos-arm64.dmg
       - uses: actions/upload-artifact@v4
         with:

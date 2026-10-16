@@ -10,7 +10,7 @@ Fast JSON loading, KV parsing and other stuff came mostly from my libraries from
 
 ![JSON Viewer](docs/screenshot.png)
 
-Everything is drawn by the app itself, so it's a single executable without dependencies besides the system libraries (libX11 on Linux, Wayland libraries are picked up at runtime when available).
+Everything is drawn by the app itself, so it's a single executable without dependencies besides the system libraries (libX11 on Linux, Wayland libraries are picked up at runtime when available, AppKit on macOS is loaded at runtime too). LLM also helped with adding macos UI and build, but I would not call it a proper support, it's a build mostly to satisfy my own needs. Linux is the main platform and Windows build should work fine.
 
 ## Features
 
@@ -28,12 +28,12 @@ Everything is drawn by the app itself, so it's a single executable without depen
 - Search in keys and values, go to path (`$.items[3].name`)
 - Filtering children of an array or object: `type=epilogue`, several words, `-word` to exclude
 - Comparing two files, or the opened document with what changed on disk. A bar at the top tells when the file was changed by another program
-- GUI for Linux (X11 and native Wayland) and Windows, terminal UI for everything else
+- GUI for Linux (X11 and native Wayland), Windows and macOS, terminal UI for everything else
 - Takes colors and fonts from KDE settings, light/dark mode from Windows settings
 
 ## Build
 
-Prebuilt binaries for Linux (x86_64, aarch64, also as AppImage), Windows and macOS (terminal UI only) are on the [releases page](https://github.com/leamare/json-viewer-d/releases).
+Prebuilt binaries for Linux (x86_64, aarch64, also as AppImage), Windows and macOS (arm64) are on the [releases page](https://github.com/leamare/json-viewer-d/releases).
 
 macOS builds aren't notarized, so macOS refuses to open the downloaded file. Allow it in System Settings → Privacy & Security → "Open Anyway", or run `xattr -d com.apple.quarantine jsonview`.
 
@@ -95,6 +95,8 @@ GUI:
 - Ctrl+Enter in the details pane - apply changes
 - Ctrl+U - source view, Ctrl+Z/Ctrl+Y - undo/redo
 - Ctrl+O/Ctrl+S/Ctrl+Shift+S - open, save, save as, Ctrl+Shift+V - open JSON from the clipboard
+
+On macOS Cmd works as Ctrl.
 
 TUI keys are shown with F1. `E` opens the selected element in `$EDITOR`.
 

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>JSON Viewer</string>
+  <key>CFBundleDisplayName</key>
+  <string>JSON Viewer</string>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.leamare.jsonview</string>
+  <key>CFBundleExecutable</key>
+  <string>jsonview</string>
+  <key>CFBundleIconFile</key>
+  <string>jsonview</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1.1.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>JSON document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.json</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>JSON Lines and KeyValues</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>jsonl</string>
+        <string>ndjson</string>
+        <string>ljson</string>
+        <string>jsonc</string>
+        <string>vdf</string>
+        <string>kv</string>
+        <string>kv3</string>
+        <string>vdata</string>
+        <string>res</string>
+        <string>acf</string>
+        <string>gz</string>
+        <string>bz2</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

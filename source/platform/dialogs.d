@@ -1,6 +1,7 @@
 /// Native file dialogs. Linux has no standard dialog API without big libraries,
 /// so kdialog or zenity are used when installed, they look native on KDE and
-/// GNOME. When neither is there the app asks for a path itself.
+/// GNOME. When neither is there the app asks for a path itself. Windows and
+/// macOS show their own dialogs.
 module platform.dialogs;
 
 import std.string : strip, join;
@@ -54,7 +55,20 @@ FileDialog showSaveDialog(string title, FileFilter[] filters, string suggested, 
   return show(title, filters, suggested, true, parentWindow);
 }
 
-version (Posix) private FileDialog show(string title, FileFilter[] filters, string path, bool save,
+version (OSX) private FileDialog show(string title, FileFilter[] filters, string path, bool save,
+  ulong parent) {
+  import platform.cocoa : filePanel;
+
+  auto d = new FileDialog;
+
+  d.finished = true;
+  d.chosen = filePanel(title, path, save);
+
+  return d;
+}
+
+version (OSX) {
+} else version (Posix) private FileDialog show(string title, FileFilter[] filters, string path, bool save,
   ulong parent) {
   import std.process : environment, pipeProcess, Redirect;
   import std.conv : to;

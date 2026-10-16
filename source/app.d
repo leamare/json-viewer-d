@@ -287,7 +287,7 @@ private bool displayAvailable() {
   version (Windows) {
     return true;
   } else version (OSX) {
-    return false;
+    return !environment.get("SSH_CONNECTION").length;
   } else {
     return environment.get("DISPLAY").length > 0 || environment.get("WAYLAND_DISPLAY").length > 0;
   }
