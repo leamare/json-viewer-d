@@ -10,7 +10,7 @@ import formats;
 import view.actions : describeFormat, formatFromName;
 import view.stats;
 
-enum appVersion = "1.0.0";
+enum appVersion = "1.0.1";
 
 int main(string[] args) {
   bool tui, gui, stats, compact, tabs, kvTypes, showVersion, compare;

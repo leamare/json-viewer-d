@@ -35,6 +35,8 @@ Everything is drawn by the app itself, so it's a single executable without depen
 
 Prebuilt binaries for Linux (x86_64, aarch64, also as AppImage), Windows and macOS (terminal UI only) are on the [releases page](https://github.com/leamare/json-viewer-d/releases).
 
+macOS builds aren't notarized, so macOS refuses to open the downloaded file. Allow it in System Settings → Privacy & Security → "Open Anyway", or run `xattr -d com.apple.quarantine jsonview`.
+
 Build:
 `dub build -b release`
 
