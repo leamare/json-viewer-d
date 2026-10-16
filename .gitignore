@@ -1,7 +1,6 @@
 .dub
 .vscode
 bin/
-docs/
 docs.json
 __dummy.html
 /jsonview

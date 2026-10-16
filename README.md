@@ -6,6 +6,10 @@ Made as a replacement for MiTeC JSON Viewer, which I really liked for how fast i
 
 It opens huge files quickly and doesn't eat much memory: the tree is a flat array of 32 byte nodes pointing into the file text, nothing is copied until you edit it. 300 MB JSON with ~18 million nodes loads in under a second and takes ~600 MB of RAM on top of the file itself.
 
+Fast JSON loading, KV parsing and other stuff came mostly from my libraries from other projects, which I wanted to compile in a somewhat coherent way. The GUI/TUI and cross-platform build code was LLM assisted (it also helped with cleanup and readme).
+
+![JSON Viewer](docs/screenshot.png)
+
 Everything is drawn by the app itself, so it's a single executable without dependencies besides the system libraries (libX11 on Linux, Wayland libraries are picked up at runtime when available).
 
 ## Features
@@ -29,13 +33,11 @@ Everything is drawn by the app itself, so it's a single executable without depen
 
 ## Build
 
-1. Install a D compiler (DMD or LDC) and DUB
-2. Run `dub build -b release` (or `dub build -b release --compiler=ldc2` for a faster binary)
-3. The binary is in `bin/`
+Build:
+`dub build -b release`
 
-On Linux libX11 headers are not needed, just the library itself.
-
-Tests: `dub test`
+Tests:
+`dub test`
 
 ## Usage
 
