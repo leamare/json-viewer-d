@@ -2,7 +2,6 @@ module platform.wayland;
 
 version (linux):
 
-import core.stdc.string : memcpy;
 import core.sys.linux.dlfcn : dlopen, dlsym, RTLD_NOW, RTLD_LOCAL;
 import core.sys.posix.poll;
 import core.sys.posix.sys.mman : mmap, munmap, PROT_READ, PROT_WRITE, MAP_SHARED, MAP_FAILED, MAP_PRIVATE;
@@ -418,6 +417,14 @@ final class WaylandWindow : Window {
     xkbContext = xkb_context_new(0);
     surface = create(compositor, 0, surfaceIface, null);
     wl_proxy_add_listener(surface, cast(void*)&surfaceListener, cast(void*)this);
+
+    // the whole window is opaque, parts outside of the surface are ignored
+    auto region = create(compositor, 1, regionIface, null);
+
+    send(region, 1, 0, 0, int.max, int.max);
+    send(surface, 4, region);
+    destroyProxy(region);
+
     if (fractional !is null && viewporterObj !is null) {
       scaleObj = create(fractional, 1, &fractionalScale, null, surface);
       wl_proxy_add_listener(scaleObj, cast(void*)&fractionalListener, cast(void*)this);
@@ -495,7 +502,13 @@ final class WaylandWindow : Window {
       return;
     }
 
-    memcpy(b.pixels, pixels.ptr, cast(size_t)w * h * 4);
+    auto dst = b.pixels[0 .. cast(size_t)w * h];
+
+    // KWin can blend XRGB buffers by their unused alpha byte, so it has to be opaque too
+    foreach (k, p; pixels[0 .. dst.length]) {
+      dst[k] = p | 0xFF000000;
+    }
+
     b.busy = true;
     send(surface, 1, b.buffer, 0, 0);
     send(surface, 9, 0, 0, w, h);
