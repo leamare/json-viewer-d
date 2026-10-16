@@ -114,4 +114,4 @@ TUI keys are shown with F1. `E` opens the selected element in `$EDITOR`.
 - Support for "Wrapped" JSON objects (e.g. D2-LRG2 blobs)
 - Support for protobuf binary blobs with an option to load protobuf schema on top of that
 - Support for CSV
-- Column visibiility toggle in the preview
+- Support for markdown maybe? Would it be too much?
