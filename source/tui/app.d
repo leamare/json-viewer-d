@@ -13,6 +13,7 @@ import doc.edit;
 import formats;
 import tui.clipboard;
 import tui.screen;
+import tui.table;
 import tui.term;
 import view.actions;
 import view.search;
@@ -43,6 +44,12 @@ private struct Choice {
   void delegate(dchar) onKey;
 }
 
+private enum DetailsMode {
+  table,
+  text,
+  source,
+}
+
 private final class TuiApp {
   Terminal term;
   Screen screen;
@@ -57,6 +64,11 @@ private final class TuiApp {
 
   string[] detailsLines;
   ulong detailsRevision;
+  DetailsMode detailsMode;
+  TuiTable table;
+  size_t[] sourceLines;
+  int sourceX;
+  long markedLine = -1;
   uint detailsNode = noNode;
   bool detailsTruncated;
 
@@ -77,6 +89,7 @@ private final class TuiApp {
   this(Document doc) {
     term = new Terminal;
     screen = new Screen;
+    table = new TuiTable;
     setDocument(doc);
   }
 
@@ -84,6 +97,7 @@ private final class TuiApp {
     doc = d;
     tree = new TreeModel(doc);
     detailsNode = noNode;
+    sourceLines = null;
     if (doc.error.length) {
       error(doc.error);
     }
@@ -233,6 +247,7 @@ private final class TuiApp {
       case 'x': askExport(); break;
       case 'o': askOpen(); break;
       case 'v': showDetails = !showDetails; detailsFocus = false; break;
+      case 't': nextDetailsMode(); break;
       case 'i': showInfo(); break;
       case '?': showHelp = true; break;
       case 'q': quit(); break;
@@ -240,8 +255,52 @@ private final class TuiApp {
     }
   }
 
+  void nextDetailsMode() {
+    detailsMode = cast(DetailsMode)((detailsMode + 1) % 3);
+    detailsNode = noNode;
+    showDetails = true;
+  }
+
+  /// Table mode is for containers only, values are shown as text
+  @property DetailsMode shownMode() {
+    auto sel = tree.selected;
+
+    if (detailsMode == DetailsMode.table && (sel == noNode || !doc[sel].isContainer)) {
+      return DetailsMode.text;
+    }
+
+    return detailsMode;
+  }
+
   bool detailsKey(ref KeyEvent ev) {
     int page = max(1, detH - 1);
+
+    if (ev.key == Key.character && ev.ch == 't') {
+      nextDetailsMode();
+
+      return true;
+    }
+
+    if (shownMode == DetailsMode.table && ev.key != Key.tab && ev.key != Key.escape) {
+      return table.key(ev, page - 1, (label, initial, done) { ask(label, initial, done); }, (n) {
+        tree.reveal(n);
+        detailsFocus = false;
+      });
+    }
+
+    if (shownMode == DetailsMode.source) {
+      if (ev.key == Key.left) {
+        sourceX = max(0, sourceX - 20);
+
+        return true;
+      }
+
+      if (ev.key == Key.right) {
+        sourceX += 20;
+
+        return true;
+      }
+    }
 
     switch (ev.key) {
       case Key.up: detailsScroll--; break;
@@ -1017,6 +1076,19 @@ private final class TuiApp {
   }
 
   void drawDetails() {
+    auto mode = shownMode;
+
+    if (mode == DetailsMode.table) {
+      table.load(doc, tree, tree.selected);
+      table.draw(screen, detX + 1, detY, detW - 1, detH, detailsFocus);
+
+      return;
+    }
+
+    if (mode == DetailsMode.source) {
+      return drawSource();
+    }
+
     auto sel = tree.selected;
 
     if (sel != detailsNode || doc.revision != detailsRevision) {
@@ -1053,6 +1125,85 @@ private final class TuiApp {
 
     if (detailsFocus) {
       screen.put(detX + detW - 3, detY, "●", Style(Color.blue));
+    }
+  }
+
+  /// Raw file text, starting from the line of the selected element
+  void drawSource() {
+    import core.stdc.string : memchr;
+
+    auto text = doc.sourceText;
+
+    if (!sourceLines.length) {
+      sourceLines ~= 0;
+
+      const(char)* p = text.ptr, end = text.ptr + text.length;
+
+      while (p < end) {
+        auto nl = cast(const(char)*)memchr(p, '\n', end - p);
+
+        if (nl is null) {
+          break;
+        }
+
+        sourceLines ~= nl - text.ptr + 1;
+        p = nl + 1;
+      }
+    }
+
+    auto sel = tree.selected;
+
+    if (sel != detailsNode) {
+      detailsNode = sel;
+      markedLine = -1;
+
+      auto pos = sel == noNode ? ulong.max : doc.sourcePos(sel);
+
+      if (pos != ulong.max) {
+        import std.range : assumeSorted;
+
+        markedLine = cast(long)sourceLines.assumeSorted.lowerBound(cast(size_t)pos + 1).length - 1;
+        detailsScroll = cast(int)max(0, markedLine - detH / 3);
+
+        // long lines are scrolled to the element itself
+        auto column = cast(int)(pos - sourceLines[cast(size_t)markedLine]);
+
+        sourceX = column > detW / 2 ? column - detW / 4 : 0;
+      }
+    }
+
+    auto dim = Style(Color.none, Color.none, Attr.dim);
+    int gutter = cast(int)sourceLines.length.to!string.length + 1;
+
+    detailsScroll = max(0, min(detailsScroll, cast(int)sourceLines.length - detH));
+    foreach (k; 0 .. detH) {
+      auto li = cast(size_t)(detailsScroll + k);
+
+      if (li >= sourceLines.length) {
+        break;
+      }
+
+      auto start = sourceLines[li];
+      auto end = li + 1 < sourceLines.length ? sourceLines[li + 1] : text.length;
+      auto line = text[start .. end];
+      int y = detY + k;
+
+      screen.put(detX + 1, y, (li + 1).to!string, dim);
+      if (sourceX < line.length) {
+        auto from = cast(size_t)sourceX;
+
+        while (from > 0 && from < line.length && (line[from] & 0xC0) == 0x80) {
+          from--;
+        }
+
+        auto part = line[from .. min(line.length, from + detW * 4)];
+
+        screen.put(detX + 1 + gutter, y, part, Style.init, detX + detW);
+      }
+
+      if (cast(long)li == markedLine) {
+        screen.addAttr(detX + 1, y, detW - 1, Attr.underline);
+      }
     }
   }
 
@@ -1166,7 +1317,8 @@ private final class TuiApp {
       "  → l / ← h      expand / collapse, go to child / parent",
       "  Enter Space    toggle          + -          expand / collapse all below",
       "  Home End g G   first / last    Tab          focus details pane",
-      "  v              show or hide details pane",
+      "  v              show or hide details pane, t switches it: table, text, raw source",
+      "  in table       \u2190 \u2192 column, o sort, f filter column, F clear filters, Enter show in tree",
       "",
       "Editing",
       "  e F2           edit value (containers and long text open $EDITOR)",

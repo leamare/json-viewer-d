@@ -1,5 +1,6 @@
 module view.search;
 
+import std.conv : to;
 import std.uni : toLower;
 
 import doc.document;
@@ -297,4 +298,88 @@ private ptrdiff_t indexOfAny(string s, string chars) {
   }
 
   return -1;
+}
+
+struct ValueFilter {
+  enum Op {
+    contains,
+    exact,
+    less,
+    more,
+    lessOrEqual,
+    moreOrEqual,
+  }
+
+  Op op;
+  string text;
+  double number;
+  bool negate;
+
+  bool matches(string value) const {
+    import std.algorithm : canFind;
+    import std.uni : toLower;
+
+    if (op == Op.contains) {
+      return value.toLower.canFind(text);
+    }
+
+    if (op == Op.exact) {
+      return value.toLower == text;
+    }
+
+    double v;
+
+    try {
+      v = value.to!double;
+    } catch (Exception) {
+      return false;
+    }
+
+    final switch (op) {
+      case Op.contains:
+      case Op.exact:
+        return false;
+      case Op.less: return v < number;
+      case Op.more: return v > number;
+      case Op.lessOrEqual: return v <= number;
+      case Op.moreOrEqual: return v >= number;
+    }
+  }
+}
+
+/// "text", "=text", "!text", ">5", "<=5"
+ValueFilter parseValueFilter(string s) {
+  import std.string : strip;
+  import std.uni : toLower;
+
+  ValueFilter f;
+
+  s = s.strip;
+  if (s.length > 1 && s[0] == '!') {
+    f.negate = true;
+    s = s[1 .. $].strip;
+  }
+
+  foreach (op; [">=", "<=", ">", "<"]) {
+    if (s.length > op.length && s[0 .. op.length] == op) {
+      try {
+        f.number = s[op.length .. $].strip.to!double;
+        f.op = op == ">=" ? ValueFilter.Op.moreOrEqual : op == "<=" ? ValueFilter.Op.lessOrEqual :
+          op == ">" ? ValueFilter.Op.more : ValueFilter.Op.less;
+
+        return f;
+      } catch (Exception) {
+        break;
+      }
+    }
+  }
+
+  if (s.length && s[0] == '=') {
+    f.op = ValueFilter.Op.exact;
+    s = s[1 .. $];
+  }
+
+  f.text = s.toLower;
+
+  return f;
 }
