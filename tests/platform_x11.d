@@ -1,6 +1,8 @@
 module tests.platform_x11;
 
 version (Posix):
+version (OSX) {
+} else:
 
 import core.sys.posix.poll;
 import platform.window;

@@ -1,6 +1,8 @@
 module platform.x11;
 
 version (Posix):
+version (OSX) {
+} else:
 
 import core.stdc.config : c_long, c_ulong;
 import core.stdc.locale : setlocale, LC_ALL;
